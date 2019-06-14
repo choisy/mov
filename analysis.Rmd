@@ -8,6 +8,8 @@ output:
   pdf_document:
     toc: yes
 <!-- bibliography: references.bib -->
+editor_options: 
+  chunk_output_type: console
 ---
 
 <!--
@@ -48,5 +50,282 @@ knitr::opts_chunk$set(margin = TRUE, prompt = TRUE, comment = "",
                       fig.width = 4.24725, fig.retina = 2, fig.align = "center")
 
 options(width = 137)
+```
+
+## Packages
+
+```{r}
+required <- c("dplyr", "haven", "lubridate", "magrittr", "purrr", "survey", "tidyr")
+to_install <- setdiff(required, row.names(installed.packages()))
+if (length(to_install)) install.packages(to_install)
+```
+
+```{r}
+library(magrittr)
+library(dplyr)
+library(survey)
+```
+
+## Utilitary functions
+
+```{r}
+date_vaccins <- function(df, series) {
+  require(magrittr)
+  require(dplyr)
+  fct <- function(df) lapply(seq(1, ncol(df), 3), function(x) df[, x:(x + 2)])
+  df %<>% select(starts_with(series))
+  vaccins <- unique(sub(".$", "", colnames(df)))
+  df %>% 
+    fct() %>% 
+    lapply(tidyr::unite, col = "a", sep = "-") %>% 
+    purrr::reduce(bind_cols) %>% 
+    setNames(vaccins) %>% 
+    mutate_all(list(~na_if(., "NA-NA-NA"))) %>% 
+    mutate_all(list(~na_if(., "0-0-0"))) %>% 
+    mutate_all(list(~na_if(., "0-NA-NA"))) %>% 
+    mutate_all(list(~!is.na(.)))
+}
+```
+
+```{r}
+remove_vaccins <- function(df) {
+  require(dplyr)
+  select(df, -starts_with("IM3"), -starts_with("HF13"))
+}
+```
+
+```{r}
+nb_doses <- function(df, series) {
+  require(magrittr)
+  require(dplyr)
+  df %<>% select(starts_with(series))
+  vacc_names <- unique(sub("[1-9]$", "", names(df)))
+  lapply(vacc_names,
+         function(x) {
+           tmp <- select(df, matches(paste0(x, "[1-9]")))
+           if (ncol(tmp) < 1) return(select(df, matches(x)))
+           return(rowSums(tmp))
+         }) %>% 
+    as.data.frame() %>% 
+    setNames(paste0(vacc_names, "_nbdoses"))
+}
+```
+
+```{r}
+calc_nb_doses <- function(df) lapply(list(I,
+                                          function(x) nb_doses(x, "IM3"),
+                                          function(x) nb_doses(x, "HF13")),
+                                     function(f) f(df)) %>% dplyr::bind_cols()
+```
+
+```{r}
+im3hf13 <- function(x) {
+  if (is.na(x[1])) return(x[2])
+  x[1]
+}
+```
+
+```{r}
+combines_sources <- function(df) {
+  require(dplyr)
+  df2 <- select(df, ends_with("_nbdoses"))
+  vacc_names <- df2 %>%
+    names() %>% 
+    sub("_nbdoses", "", .) %>%
+    sub("IM3", "", .) %>%
+    sub("HF13", "", .) %>%
+    unique()
+  paste0(vacc_names, "_") %>%
+    lapply(function(x) apply(select(df2, matches(x, FALSE)), 1, im3hf13)) %>% 
+    as.data.frame() %>% 
+    setNames(paste0(vacc_names, "_bothsources")) %>% 
+    mutate_all(as.numeric) %>% 
+    bind_cols(df, .)
+}
+```
+
+```{r}
+post_natal_check <- function(df) {
+  require(dplyr)
+  f <- function(x) {
+    if (all(is.na(x))) {
+      return(NA)
+    } else {
+      if (all(x == "")) return(FALSE)
+      TRUE
+    }
+  }
+  bind_cols(df, data.frame(post_natal_check = apply(select(df, PN13A, PN13B), 1, f)))
+}
+```
+
+```{r}
+curative_care <- function(df) {
+  require(dplyr)
+  f <- function(x) {
+    if (all(is.na(x))) {
+      return(NA)
+    } else {
+      if (all(x == "")) return(FALSE)
+      TRUE
+    }
+  }
+  bind_cols(df, data.frame(curative_care = apply(select(df, CA11A, CA11B, CA11C, CA11E, CA11F, CA11I, CA11J, CA3BA, CA3BB, CA3BC, CA3BE, CA3BF, CA3BI, CA3BJ), 1, f)))
+}
+```
+
+```{r}
+expect_doses <- function(age_days, vacc, rule) {
+  require(magrittr)
+  require(dplyr)
+  filter(rule, Name.of.vaccines == vacc) %>%   
+    arrange(., Age.in.days) %$%
+    c(0, Age.in.days, max(age_days, na.rm = TRUE) + 1) %>% 
+    cut(age_days, .) %>% 
+    as.integer() %>% 
+    `-`(1)
+}
+```
+
+```{r}
+make_formula <- function(x, y) as.formula(paste(y, "~", paste(x, collapse = " + ")))
+```
+
+```{r}
+svyglm_corrected <- function(formula, design) {
+  require(survey)
+  require(dplyr)
+  tmp <- all.vars(formula)
+  y <- tmp[1]
+  xs <- tmp[-1]
+  lapply(seq_along(xs),
+         function(z) {
+           make_formula(c(xs[-z], xs[z]), y) %>% 
+             svyglm(., family = binomial, design = final) %>% 
+             anova(.,test = "Chisq") %>%
+             `[[`(length(xs)) %>% 
+             unclass() %>% 
+            `[`(c("chisq", "df", "p")) %>% 
+             unlist()
+         }) %>%
+   purrr::reduce(., bind_rows) %>% 
+   bind_cols(var = xs, .)
+}
+```
+
+## Loading the data
+
+```{r}
+vaccines <- read.csv("VACCINES.csv", stringsAsFactors = FALSE)
+```
+
+Loading the children data set:
+
+```{r}
+ch <- haven::read_sav("ch.sav") %>% 
+  dplyr::select(HH1, HH2, UF6, UF4, UF8D:UF8Y, HH6, HH7, IM19A, IM19B, ED4A, AG2,
+                AG1D:AG1Y, windex5, melevel:chweight, HL4, IM5:IM16, CA1, CA7,
+                CA3BA, CA3BB, CA3BC, CA3BE, CA3BF, CA3BI, CA3BJ, CA11A:CA11C,
+                CA11E, CA11F, CA11I, CA11J, IM3BD:IM3V2Y, HF13BD:HF13V2Y)
+```
+
+Loading the women data set:
+
+```{r}
+wm <- haven::read_sav("wm.sav") %>% 
+  dplyr::select(HH1:LN, WM4, WB2, MT0, CM1, MN18, CM13, PN10, PN13A, PN13B)
+```
+
+## Preparing the data
+
+```{r}
+mics <- lapply(list(remove_vaccins,
+                    function(x) date_vaccins(x, "IM3"),
+                    function(x) date_vaccins(x, "HF13")),
+               function(f) f(dplyr::left_join(ch, wm,  c("HH1", "HH2", "UF6" = "LN")))) %>% 
+  bind_cols() %>% 
+  calc_nb_doses() %>% 
+  combines_sources() %>% 
+  post_natal_check() %>% 
+  curative_care() %>% 
+  mutate(age = as.numeric(lubridate::dmy(paste0(UF8D, "-", UF8M, "-", UF8Y)) -
+                          lubridate::dmy(paste0(AG1D, "-", AG1M, "-", AG1Y))),
+         delivery = ifelse(MN18 < 13,
+                           "home",
+                           ifelse(MN18 > 13 & MN18 < 27,
+                                  "public",
+                                  ifelse(MN18 > 27 & MN18 < 37,
+                                         "private",
+                                         NA))),
+         HH6 = recode(unclass(HH6), "1" = "urban", "2" = "rural"),
+         HH7 = recode(unclass(HH7),
+                      "1" = "Red River Delta",
+                      "2" = "Northern Midlands and Mountain area",
+                      "3" = "North Central and Central Coastal area",
+                      "4" = "Central Highlands",
+                      "5" = "South East",
+                      "6" = "Mekong River Delta"),
+         mov1 = if_else(is.na(post_natal_check) | is.na(B_bothsources), NA,
+                        post_natal_check & B_bothsources < 1),
+         mov2 = if_else(is.na(post_natal_check) | is.na(H0_bothsources), NA,
+                        post_natal_check & H0_bothsources < 1),
+         vitaminA1 = IM3V1 + HF13V1 > 0,
+         vitaminA2 = IM3V2 + HF13V2 > 0,
+         IM19A = na_if(IM19A,"8"), IM19A = na_if(IM19A,"9"), IM19A = IM19A == "1",
+         IM19B = na_if(IM19B,"8"), IM19B = na_if(IM19B,"9"), IM19B = IM19B == "1",
+         mov4 = vitaminA1 & P_bothsources < 1,
+         mov6 = vitaminA2 & M_bothsources < 1,
+         mov8 = IM19B == 1 & P_bothsources < 1,
+         mov10 = IM19A == 1 & M_bothsources < 1,
+         expect_P = expect_doses(age, "P", vaccines),
+         expect_M = expect_doses(age, "M", vaccines),
+         mov12 = if_else(is.na(curative_care) | is.na(P_bothsources), NA,
+                         curative_care & P_bothsources < 1 & expect_P >= 1),
+         mov14 = if_else(is.na(curative_care) | is.na(M_bothsources), NA,
+                         curative_care & M_bothsources < 1 & expect_M == 1),
+         PEND_bothsources = PEN_bothsources + D_bothsources == 3,
+         mov15 = vitaminA1 & PEND_bothsources < 1,
+         mov16 = if_else(is.na(curative_care) | is.na(PEND_bothsources), NA,
+                         curative_care & PEND_bothsources < 1 & expect_P >= 1),
+         mov17 =  IM19B ==1 & PEND_bothsources < 1,
+         mov18 =  if_else(M_bothsources ==1 & PEND_bothsources < 1 | P_bothsources < 1 | B_bothsources < 1, TRUE, FALSE),
+         mov_any= if_else(mov1 == TRUE | mov2 ==TRUE | mov4 ==TRUE | mov6 == TRUE |
+                          mov8 == TRUE | mov10 ==TRUE | mov12 ==TRUE | mov14 ==TRUE |
+                          mov15 == TRUE | mov16 == TRUE | mov17 == TRUE | mov18 == TRUE, TRUE, FALSE),
+         vaccine_status = if_else(B_bothsources==1 & P_bothsources ==3 & PEND_bothsources ==TRUE & M_bothsources == 1, 1, 0)) %>% 
+  unclass() %>% 
+  as.data.frame() %>% 
+  survey::svydesign(~HH1+HH2, strata = ~HH6 + HH7, weights = ~ chweight, data = .)
+```
+
+## Analyses
+
+```{r include = FALSE}
+mov <- c(paste0("mov", c(1, seq(2, 12, 2), 14:18)), "mov_any")
+```
+
+```{r eval = FALSE}
+mov <- c(paste0("mov", c(1, seq(2, 12, 2), 14:18)), "mov_any")
+x <- c("HH6", "HH7", "delivery", "melevel", "ethnicity", "windex5", "HL4", "WB2", "MT0")
+
+model_stat <- mov %>%
+  lapply(make_formula, x = x) %>% 
+  lapply(svyglm_corrected, subset(mics, age >= 365 & age <= 700))
+```
+
+### Calculating the number of MOV
+
+```{r}
+mics$variables %>% 
+  filter(age >= 365 & age <= 700) %>% 
+  dplyr::select(!! mov) %>% 
+  sapply(sum, na.rm = TRUE)
+```
+
+### Number of children completely vaccinated
+
+```{r}
+svymean(~vaccine_status, mics, TRUE)
+svymean(~vaccine_status, subset(mics, age >= 365 & age <= 700))
 ```
 

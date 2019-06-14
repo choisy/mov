@@ -377,6 +377,18 @@ $(document).ready(function () {
 
 </div>
 
+<div id="TOC">
+<ul>
+<li><a href="#packages">Packages</a></li>
+<li><a href="#utilitary-functions">Utilitary functions</a></li>
+<li><a href="#loading-the-data">Loading the data</a></li>
+<li><a href="#preparing-the-data">Preparing the data</a></li>
+<li><a href="#analyses">Analyses</a><ul>
+<li><a href="#calculating-the-number-of-mov">Calculating the number of MOV</a></li>
+<li><a href="#number-of-children-completely-vaccinated">Number of children completely vaccinated</a></li>
+</ul></li>
+</ul>
+</div>
 
 <!--
 IMAGES:
@@ -398,6 +410,252 @@ title wherever you want to display the reference list.
   margin-right: auto;
 }
 </style>
+<div id="packages" class="section level2">
+<h2>Packages</h2>
+<pre class="r"><code>&gt; required &lt;- c(&quot;dplyr&quot;, &quot;haven&quot;, &quot;lubridate&quot;, &quot;magrittr&quot;, &quot;purrr&quot;, &quot;survey&quot;, &quot;tidyr&quot;)
+&gt; to_install &lt;- setdiff(required, row.names(installed.packages()))
+&gt; if (length(to_install)) install.packages(to_install)</code></pre>
+<pre class="r"><code>&gt; library(magrittr)
+&gt; library(dplyr)
+
+Attaching package: &#39;dplyr&#39;
+The following objects are masked from &#39;package:stats&#39;:
+
+    filter, lag
+The following objects are masked from &#39;package:base&#39;:
+
+    intersect, setdiff, setequal, union
+&gt; library(survey)
+Loading required package: grid
+Loading required package: Matrix
+Loading required package: survival
+
+Attaching package: &#39;survey&#39;
+The following object is masked from &#39;package:graphics&#39;:
+
+    dotchart</code></pre>
+</div>
+<div id="utilitary-functions" class="section level2">
+<h2>Utilitary functions</h2>
+<pre class="r"><code>&gt; date_vaccins &lt;- function(df, series) {
++   require(magrittr)
++   require(dplyr)
++   fct &lt;- function(df) lapply(seq(1, ncol(df), 3), function(x) df[, x:(x + 2)])
++   df %&lt;&gt;% select(starts_with(series))
++   vaccins &lt;- unique(sub(&quot;.$&quot;, &quot;&quot;, colnames(df)))
++   df %&gt;% 
++     fct() %&gt;% 
++     lapply(tidyr::unite, col = &quot;a&quot;, sep = &quot;-&quot;) %&gt;% 
++     purrr::reduce(bind_cols) %&gt;% 
++     setNames(vaccins) %&gt;% 
++     mutate_all(list(~na_if(., &quot;NA-NA-NA&quot;))) %&gt;% 
++     mutate_all(list(~na_if(., &quot;0-0-0&quot;))) %&gt;% 
++     mutate_all(list(~na_if(., &quot;0-NA-NA&quot;))) %&gt;% 
++     mutate_all(list(~!is.na(.)))
++ }</code></pre>
+<pre class="r"><code>&gt; remove_vaccins &lt;- function(df) {
++   require(dplyr)
++   select(df, -starts_with(&quot;IM3&quot;), -starts_with(&quot;HF13&quot;))
++ }</code></pre>
+<pre class="r"><code>&gt; nb_doses &lt;- function(df, series) {
++   require(magrittr)
++   require(dplyr)
++   df %&lt;&gt;% select(starts_with(series))
++   vacc_names &lt;- unique(sub(&quot;[1-9]$&quot;, &quot;&quot;, names(df)))
++   lapply(vacc_names,
++          function(x) {
++            tmp &lt;- select(df, matches(paste0(x, &quot;[1-9]&quot;)))
++            if (ncol(tmp) &lt; 1) return(select(df, matches(x)))
++            return(rowSums(tmp))
++          }) %&gt;% 
++     as.data.frame() %&gt;% 
++     setNames(paste0(vacc_names, &quot;_nbdoses&quot;))
++ }</code></pre>
+<pre class="r"><code>&gt; calc_nb_doses &lt;- function(df) lapply(list(I,
++                                           function(x) nb_doses(x, &quot;IM3&quot;),
++                                           function(x) nb_doses(x, &quot;HF13&quot;)),
++                                      function(f) f(df)) %&gt;% dplyr::bind_cols()</code></pre>
+<pre class="r"><code>&gt; im3hf13 &lt;- function(x) {
++   if (is.na(x[1])) return(x[2])
++   x[1]
++ }</code></pre>
+<pre class="r"><code>&gt; combines_sources &lt;- function(df) {
++   require(dplyr)
++   df2 &lt;- select(df, ends_with(&quot;_nbdoses&quot;))
++   vacc_names &lt;- df2 %&gt;%
++     names() %&gt;% 
++     sub(&quot;_nbdoses&quot;, &quot;&quot;, .) %&gt;%
++     sub(&quot;IM3&quot;, &quot;&quot;, .) %&gt;%
++     sub(&quot;HF13&quot;, &quot;&quot;, .) %&gt;%
++     unique()
++   paste0(vacc_names, &quot;_&quot;) %&gt;%
++     lapply(function(x) apply(select(df2, matches(x, FALSE)), 1, im3hf13)) %&gt;% 
++     as.data.frame() %&gt;% 
++     setNames(paste0(vacc_names, &quot;_bothsources&quot;)) %&gt;% 
++     mutate_all(as.numeric) %&gt;% 
++     bind_cols(df, .)
++ }</code></pre>
+<pre class="r"><code>&gt; post_natal_check &lt;- function(df) {
++   require(dplyr)
++   f &lt;- function(x) {
++     if (all(is.na(x))) {
++       return(NA)
++     } else {
++       if (all(x == &quot;&quot;)) return(FALSE)
++       TRUE
++     }
++   }
++   bind_cols(df, data.frame(post_natal_check = apply(select(df, PN13A, PN13B), 1, f)))
++ }</code></pre>
+<pre class="r"><code>&gt; curative_care &lt;- function(df) {
++   require(dplyr)
++   f &lt;- function(x) {
++     if (all(is.na(x))) {
++       return(NA)
++     } else {
++       if (all(x == &quot;&quot;)) return(FALSE)
++       TRUE
++     }
++   }
++   bind_cols(df, data.frame(curative_care = apply(select(df, CA11A, CA11B, CA11C, CA11E, CA11F, CA11I, CA11J, CA3BA, CA3BB, CA3BC, CA3BE, CA3BF, CA3BI, CA3BJ), 1, f)))
++ }</code></pre>
+<pre class="r"><code>&gt; expect_doses &lt;- function(age_days, vacc, rule) {
++   require(magrittr)
++   require(dplyr)
++   filter(rule, Name.of.vaccines == vacc) %&gt;%   
++     arrange(., Age.in.days) %$%
++     c(0, Age.in.days, max(age_days, na.rm = TRUE) + 1) %&gt;% 
++     cut(age_days, .) %&gt;% 
++     as.integer() %&gt;% 
++     `-`(1)
++ }</code></pre>
+<pre class="r"><code>&gt; make_formula &lt;- function(x, y) as.formula(paste(y, &quot;~&quot;, paste(x, collapse = &quot; + &quot;)))</code></pre>
+<pre class="r"><code>&gt; svyglm_corrected &lt;- function(formula, design) {
++   require(survey)
++   require(dplyr)
++   tmp &lt;- all.vars(formula)
++   y &lt;- tmp[1]
++   xs &lt;- tmp[-1]
++   lapply(seq_along(xs),
++          function(z) {
++            make_formula(c(xs[-z], xs[z]), y) %&gt;% 
++              svyglm(., family = binomial, design = final) %&gt;% 
++              anova(.,test = &quot;Chisq&quot;) %&gt;%
++              `[[`(length(xs)) %&gt;% 
++              unclass() %&gt;% 
++             `[`(c(&quot;chisq&quot;, &quot;df&quot;, &quot;p&quot;)) %&gt;% 
++              unlist()
++          }) %&gt;%
++    purrr::reduce(., bind_rows) %&gt;% 
++    bind_cols(var = xs, .)
++ }</code></pre>
+</div>
+<div id="loading-the-data" class="section level2">
+<h2>Loading the data</h2>
+<pre class="r"><code>&gt; vaccines &lt;- read.csv(&quot;VACCINES.csv&quot;, stringsAsFactors = FALSE)</code></pre>
+<p>Loading the children data set:</p>
+<pre class="r"><code>&gt; ch &lt;- haven::read_sav(&quot;ch.sav&quot;) %&gt;% 
++   dplyr::select(HH1, HH2, UF6, UF4, UF8D:UF8Y, HH6, HH7, IM19A, IM19B, ED4A, AG2,
++                 AG1D:AG1Y, windex5, melevel:chweight, HL4, IM5:IM16, CA1, CA7,
++                 CA3BA, CA3BB, CA3BC, CA3BE, CA3BF, CA3BI, CA3BJ, CA11A:CA11C,
++                 CA11E, CA11F, CA11I, CA11J, IM3BD:IM3V2Y, HF13BD:HF13V2Y)</code></pre>
+<p>Loading the women data set:</p>
+<pre class="r"><code>&gt; wm &lt;- haven::read_sav(&quot;wm.sav&quot;) %&gt;% 
++   dplyr::select(HH1:LN, WM4, WB2, MT0, CM1, MN18, CM13, PN10, PN13A, PN13B)</code></pre>
+</div>
+<div id="preparing-the-data" class="section level2">
+<h2>Preparing the data</h2>
+<pre class="r"><code>&gt; mics &lt;- lapply(list(remove_vaccins,
++                     function(x) date_vaccins(x, &quot;IM3&quot;),
++                     function(x) date_vaccins(x, &quot;HF13&quot;)),
++                function(f) f(dplyr::left_join(ch, wm,  c(&quot;HH1&quot;, &quot;HH2&quot;, &quot;UF6&quot; = &quot;LN&quot;)))) %&gt;% 
++   bind_cols() %&gt;% 
++   calc_nb_doses() %&gt;% 
++   combines_sources() %&gt;% 
++   post_natal_check() %&gt;% 
++   curative_care() %&gt;% 
++   mutate(age = as.numeric(lubridate::dmy(paste0(UF8D, &quot;-&quot;, UF8M, &quot;-&quot;, UF8Y)) -
++                           lubridate::dmy(paste0(AG1D, &quot;-&quot;, AG1M, &quot;-&quot;, AG1Y))),
++          delivery = ifelse(MN18 &lt; 13,
++                            &quot;home&quot;,
++                            ifelse(MN18 &gt; 13 &amp; MN18 &lt; 27,
++                                   &quot;public&quot;,
++                                   ifelse(MN18 &gt; 27 &amp; MN18 &lt; 37,
++                                          &quot;private&quot;,
++                                          NA))),
++          HH6 = recode(unclass(HH6), &quot;1&quot; = &quot;urban&quot;, &quot;2&quot; = &quot;rural&quot;),
++          HH7 = recode(unclass(HH7),
++                       &quot;1&quot; = &quot;Red River Delta&quot;,
++                       &quot;2&quot; = &quot;Northern Midlands and Mountain area&quot;,
++                       &quot;3&quot; = &quot;North Central and Central Coastal area&quot;,
++                       &quot;4&quot; = &quot;Central Highlands&quot;,
++                       &quot;5&quot; = &quot;South East&quot;,
++                       &quot;6&quot; = &quot;Mekong River Delta&quot;),
++          mov1 = if_else(is.na(post_natal_check) | is.na(B_bothsources), NA,
++                         post_natal_check &amp; B_bothsources &lt; 1),
++          mov2 = if_else(is.na(post_natal_check) | is.na(H0_bothsources), NA,
++                         post_natal_check &amp; H0_bothsources &lt; 1),
++          vitaminA1 = IM3V1 + HF13V1 &gt; 0,
++          vitaminA2 = IM3V2 + HF13V2 &gt; 0,
++          IM19A = na_if(IM19A,&quot;8&quot;), IM19A = na_if(IM19A,&quot;9&quot;), IM19A = IM19A == &quot;1&quot;,
++          IM19B = na_if(IM19B,&quot;8&quot;), IM19B = na_if(IM19B,&quot;9&quot;), IM19B = IM19B == &quot;1&quot;,
++          mov4 = vitaminA1 &amp; P_bothsources &lt; 1,
++          mov6 = vitaminA2 &amp; M_bothsources &lt; 1,
++          mov8 = IM19B == 1 &amp; P_bothsources &lt; 1,
++          mov10 = IM19A == 1 &amp; M_bothsources &lt; 1,
++          expect_P = expect_doses(age, &quot;P&quot;, vaccines),
++          expect_M = expect_doses(age, &quot;M&quot;, vaccines),
++          mov12 = if_else(is.na(curative_care) | is.na(P_bothsources), NA,
++                          curative_care &amp; P_bothsources &lt; 1 &amp; expect_P &gt;= 1),
++          mov14 = if_else(is.na(curative_care) | is.na(M_bothsources), NA,
++                          curative_care &amp; M_bothsources &lt; 1 &amp; expect_M == 1),
++          PEND_bothsources = PEN_bothsources + D_bothsources == 3,
++          mov15 = vitaminA1 &amp; PEND_bothsources &lt; 1,
++          mov16 = if_else(is.na(curative_care) | is.na(PEND_bothsources), NA,
++                          curative_care &amp; PEND_bothsources &lt; 1 &amp; expect_P &gt;= 1),
++          mov17 =  IM19B ==1 &amp; PEND_bothsources &lt; 1,
++          mov18 =  if_else(M_bothsources ==1 &amp; PEND_bothsources &lt; 1 | P_bothsources &lt; 1 | B_bothsources &lt; 1, TRUE, FALSE),
++          mov_any= if_else(mov1 == TRUE | mov2 ==TRUE | mov4 ==TRUE | mov6 == TRUE |
++                           mov8 == TRUE | mov10 ==TRUE | mov12 ==TRUE | mov14 ==TRUE |
++                           mov15 == TRUE | mov16 == TRUE | mov17 == TRUE | mov18 == TRUE, TRUE, FALSE),
++          vaccine_status = if_else(B_bothsources==1 &amp; P_bothsources ==3 &amp; PEND_bothsources ==TRUE &amp; M_bothsources == 1, 1, 0)) %&gt;% 
++   unclass() %&gt;% 
++   as.data.frame() %&gt;% 
++   survey::svydesign(~HH1+HH2, strata = ~HH6 + HH7, weights = ~ chweight, data = .)
+Warning: Column `UF6`/`LN` has different attributes on LHS and RHS of join
+
+Warning: Column `UF6`/`LN` has different attributes on LHS and RHS of join
+
+Warning: Column `UF6`/`LN` has different attributes on LHS and RHS of join
+Warning: 69 failed to parse.</code></pre>
+</div>
+<div id="analyses" class="section level2">
+<h2>Analyses</h2>
+<pre class="r"><code>&gt; mov &lt;- c(paste0(&quot;mov&quot;, c(1, seq(2, 12, 2), 14:18)), &quot;mov_any&quot;)
+&gt; x &lt;- c(&quot;HH6&quot;, &quot;HH7&quot;, &quot;delivery&quot;, &quot;melevel&quot;, &quot;ethnicity&quot;, &quot;windex5&quot;, &quot;HL4&quot;, &quot;WB2&quot;, &quot;MT0&quot;)
+&gt; 
+&gt; model_stat &lt;- mov %&gt;%
++   lapply(make_formula, x = x) %&gt;% 
++   lapply(svyglm_corrected, subset(mics, age &gt;= 365 &amp; age &lt;= 700))</code></pre>
+<div id="calculating-the-number-of-mov" class="section level3">
+<h3>Calculating the number of MOV</h3>
+<pre class="r"><code>&gt; mics$variables %&gt;% 
++   filter(age &gt;= 365 &amp; age &lt;= 700) %&gt;% 
++   dplyr::select(!! mov) %&gt;% 
++   sapply(sum, na.rm = TRUE)
+   mov1    mov2    mov4    mov6    mov8   mov10   mov12   mov14   mov15   mov16   mov17   mov18 mov_any 
+     35      63      49      50     112     151      60      81      79      85     172     242     317 </code></pre>
+</div>
+<div id="number-of-children-completely-vaccinated" class="section level3">
+<h3>Number of children completely vaccinated</h3>
+<pre class="r"><code>&gt; svymean(~vaccine_status, mics, TRUE)
+                  mean     SE
+vaccine_status 0.26231 0.0106
+&gt; svymean(~vaccine_status, subset(mics, age &gt;= 365 &amp; age &lt;= 700))
+                  mean     SE
+vaccine_status 0.61812 0.0217</code></pre>
+</div>
+</div>
 
 
 
