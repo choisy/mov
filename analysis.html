@@ -1056,6 +1056,81 @@ HL4       FALSE FALSE    FALSE   FALSE     FALSE   FALSE  TRUE FALSE FALSE
 MT0        TRUE  TRUE     TRUE    TRUE      TRUE    TRUE FALSE  TRUE  TRUE
 WB2        TRUE  TRUE     TRUE    TRUE      TRUE    TRUE FALSE  TRUE  TRUE</code></pre>
 <p>Maybe not so much any more for <code>melevel</code> and <code>HH6</code> and for <code>melevel</code> and <code>delivery</code>, meaning that the educational level of the mother may not depend so much on the urban vs rural settings and that the mode of delivery in turn may not depend so much on the educational level of the mother.</p>
+<p>In conclusion, among our independent variables, only the sex of the child (<code>HL4</code>) can be ruled out as a potential confounder. To identify potential confounders among the other independent variables, we can with univariable analyses as before:</p>
+<pre class="r"><code>&gt; confounders &lt;- rbind(sapply(setdiff(y, c(&quot;mov4&quot;, &quot;mov6&quot;)),
++                             function(j)
++                               sapply(setdiff(x, c(&quot;HL4&quot;, &quot;WB2&quot;)),
++                                      function(i)
++                                        svychisq(make_formula(c(i, j), &quot;&quot;),
++                                                 subset(mics_survey, age_sel),
++                                                 &quot;Wald&quot;)$p.value)),
++                      sapply(setdiff(y, c(&quot;mov4&quot;, &quot;mov6&quot;)),
++                            function(x)
++                              anova(svyglm(make_formula(&quot;WB2&quot;, x), subset(mics_survey, age_sel)),
++                                    svyglm(make_formula(&quot;1&quot;, x), subset(mics_survey, age_sel)),
++                                    test = &quot;Chisq&quot;)$p))
+&gt; row.names(confounders) &lt;- sub(&quot;^$&quot;, &quot;WB2&quot;, row.names(confounders))</code></pre>
+<p>which gives:</p>
+<pre class="r"><code>&gt; round(confounders, 4)
+            mov1   mov2   mov8  mov10  mov12  mov14  mov15  mov16  mov17  mov18 mov_nn mov_pc mov_ca mov_cc mov_any mov_any2
+HH6       0.8410 0.9724 0.3134 0.0542 0.2661 0.2421 0.3155 0.0966 0.0135 0.0801 0.7911 0.3173 0.0126 0.0729  0.0443   0.0246
+HH7       0.0522 0.1900 0.6248 0.4081 0.5646 0.8340 0.9612 0.1334 0.0277 0.2326 0.1133 0.9618 0.0136 0.3272  0.0822   0.0580
+delivery  0.0577 0.0083 0.5432 0.1968 0.7710 0.4543 0.6213 0.8163 0.3631 0.0203 0.0086 0.6176 0.2029 0.6877  0.5194   0.3862
+melevel   0.9565 0.2812 0.7752 0.1520 0.0792 0.1370 0.7961 0.4327 0.9304 0.9038 0.4269 0.7988 0.3415 0.0942  0.6767   0.4856
+ethnicity 0.9465 0.7472 0.4751 0.0773 0.6351 0.1664 0.3195 0.4153 0.1344 0.8024 0.6815 0.3217 0.0497 0.2165  0.7982   0.6246
+windex5   0.6291 0.6281 0.4955 0.0154 0.3263 0.0014 0.9075 0.1190 0.9732 0.4697 0.6778 0.9084 0.2298 0.1711  0.0881   0.2099
+MT0       0.7482 0.2264 0.3958 0.8807 0.6835 0.3172 0.3188 0.8403 0.4753 0.4556 0.3946 0.3207 0.8196 0.7599  0.2121   0.7101
+WB2       0.8422 0.4656 0.0000 0.0000 0.4754 0.4028 0.2432 0.4529 0.0000 0.0537 0.7242 0.2394 0.0000 0.2306  0.0301   0.0075</code></pre>
+<p>Thus, the potential confounders, for each MOV, are:</p>
+<pre class="r"><code>&gt; (pot_conf &lt;- lapply(as.data.frame(confounders),
++                     function(x) rownames(confounders)[which(x &lt; .1)]))
+$mov1
+[1] &quot;HH7&quot;      &quot;delivery&quot;
+
+$mov2
+[1] &quot;delivery&quot;
+
+$mov8
+[1] &quot;WB2&quot;
+
+$mov10
+[1] &quot;HH6&quot;       &quot;ethnicity&quot; &quot;windex5&quot;   &quot;WB2&quot;      
+
+$mov12
+[1] &quot;melevel&quot;
+
+$mov14
+[1] &quot;windex5&quot;
+
+$mov15
+character(0)
+
+$mov16
+[1] &quot;HH6&quot;
+
+$mov17
+[1] &quot;HH6&quot; &quot;HH7&quot; &quot;WB2&quot;
+
+$mov18
+[1] &quot;HH6&quot;      &quot;delivery&quot; &quot;WB2&quot;     
+
+$mov_nn
+[1] &quot;delivery&quot;
+
+$mov_pc
+character(0)
+
+$mov_ca
+[1] &quot;HH6&quot;       &quot;HH7&quot;       &quot;ethnicity&quot; &quot;WB2&quot;      
+
+$mov_cc
+[1] &quot;HH6&quot;     &quot;melevel&quot;
+
+$mov_any
+[1] &quot;HH6&quot;     &quot;HH7&quot;     &quot;windex5&quot; &quot;WB2&quot;    
+
+$mov_any2
+[1] &quot;HH6&quot; &quot;HH7&quot; &quot;WB2&quot;</code></pre>
 </div>
 <div id="univariable-analysis" class="section level4">
 <h4>Univariable analysis</h4>

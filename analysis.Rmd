@@ -623,6 +623,41 @@ Maybe not so much any more for `melevel` and `HH6` and for `melevel` and
 much on the urban vs rural settings and that the mode of delivery in turn may
 not depend so much on the educational level of the mother.
 
+In conclusion, among our independent variables, only the sex of the child (`HL4`)
+can be ruled out as a potential confounder. To identify potential confounders
+among the other independent variables, we can with univariable analyses as
+before:
+
+```{r}
+confounders <- rbind(sapply(setdiff(y, c("mov4", "mov6")),
+                            function(j)
+                              sapply(setdiff(x, c("HL4", "WB2")),
+                                     function(i)
+                                       svychisq(make_formula(c(i, j), ""),
+                                                subset(mics_survey, age_sel),
+                                                "Wald")$p.value)),
+                     sapply(setdiff(y, c("mov4", "mov6")),
+                           function(x)
+                             anova(svyglm(make_formula("WB2", x), subset(mics_survey, age_sel)),
+                                   svyglm(make_formula("1", x), subset(mics_survey, age_sel)),
+                                   test = "Chisq")$p))
+row.names(confounders) <- sub("^$", "WB2", row.names(confounders))
+```
+
+which gives:
+
+```{r}
+round(confounders, 4)
+```
+
+Thus, the potential confounders, for each MOV, are:
+
+```{r}
+(pot_conf <- lapply(as.data.frame(confounders),
+                    function(x) rownames(confounders)[which(x < .1)]))
+```
+
+
 #### Univariable analysis
 
 For given `x` and `y` variables of a given design `design`, the following
