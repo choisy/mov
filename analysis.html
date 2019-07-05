@@ -1012,6 +1012,51 @@ vaccine_statusTRUE  0.7072110 0.7980343</code></pre>
 <h3>Logistic models</h3>
 <p>In these section, we use logistic model in order to explain the presence of MOV as a function of the following variables:</p>
 <pre class="r"><code>&gt; x &lt;- c(&quot;HH6&quot;, &quot;HH7&quot;, &quot;delivery&quot;, &quot;melevel&quot;, &quot;ethnicity&quot;, &quot;windex5&quot;, &quot;HL4&quot;, &quot;WB2&quot;, &quot;MT0&quot;)</code></pre>
+<div id="independance-between-explanatory-variables" class="section level4">
+<h4>Independance between explanatory variables</h4>
+<p>For the categorical variables (i.e. all except the age of the mother, <code>WB2</code>), we can perform a Wald test of 2 x 2 contingency table in order to generate pairwise matrix of independence:</p>
+<pre class="r"><code>&gt; vars &lt;- c(setdiff(x, &quot;WB2&quot;), &quot;WB2&quot;)
+&gt; nb &lt;- length(x)
+&gt; out &lt;- matrix(numeric(nb * nb), nb, dimnames = list(vars, vars))
+&gt; for(i in 1:(nb - 1))
++   for(j in setdiff(1:(nb - 1), i))
++     out[i, j] &lt;- svychisq(make_formula(c(vars[i], vars[j]), &quot;&quot;),
++                           subset(mics_survey, age_sel), &quot;Wald&quot;)$p.value</code></pre>
+<p>For the only continuous variable, <code>WB2</code>, we can perform simple analyses of variance and add it to the matrix:</p>
+<pre class="r"><code>&gt; out2 &lt;-
++   sapply(vars[-length(vars)],
++          function(x)
++            anova(svyglm(make_formula(x, &quot;WB2&quot;), subset(mics_survey, age_sel)),
++                  svyglm(make_formula(&quot;1&quot;, &quot;WB2&quot;), subset(mics_survey, age_sel)),
++                  test = &quot;Chisq&quot;)$p)
+&gt; out[nb, ] &lt;- c(out2, 0)
+&gt; out[, nb] &lt;- c(out2, 0)</code></pre>
+<p>The matrix looks like:</p>
+<pre class="r"><code>&gt; round(out, 4)
+             HH6    HH7 delivery melevel ethnicity windex5    HL4    MT0    WB2
+HH6       0.0000 0.0012   0.0002  0.0050    0.0002  0.0000 0.9356 0.0001 0.0000
+HH7       0.0012 0.0000   0.0000  0.0000    0.0000  0.0000 0.1403 0.0000 0.0005
+delivery  0.0002 0.0000   0.0000  0.0049    0.0001  0.0015 0.0264 0.0001 0.0002
+melevel   0.0050 0.0000   0.0049  0.0000    0.0001  0.0000 0.4009 0.0000 0.0000
+ethnicity 0.0002 0.0000   0.0001  0.0001    0.0000  0.0000 0.4869 0.0000 0.0000
+windex5   0.0000 0.0000   0.0015  0.0000    0.0000  0.0000 0.9338 0.0000 0.0001
+HL4       0.9356 0.1403   0.0264  0.4009    0.4869  0.9338 0.0000 0.0162 0.1482
+MT0       0.0001 0.0000   0.0001  0.0000    0.0000  0.0000 0.0162 0.0000 0.0017
+WB2       0.0000 0.0005   0.0002  0.0000    0.0000  0.0001 0.1482 0.0017 0.0000</code></pre>
+<p>We can see that the sex of the child (<code>HL4</code>) is the only variable that is independent from all the other ones. All the other variables are all highly dependent of each other. And this remains true even if we apply a Bonferroni correction for multiple tests:</p>
+<pre class="r"><code>&gt; out &lt; (.05 / 27)
+            HH6   HH7 delivery melevel ethnicity windex5   HL4   MT0   WB2
+HH6        TRUE  TRUE     TRUE   FALSE      TRUE    TRUE FALSE  TRUE  TRUE
+HH7        TRUE  TRUE     TRUE    TRUE      TRUE    TRUE FALSE  TRUE  TRUE
+delivery   TRUE  TRUE     TRUE   FALSE      TRUE    TRUE FALSE  TRUE  TRUE
+melevel   FALSE  TRUE    FALSE    TRUE      TRUE    TRUE FALSE  TRUE  TRUE
+ethnicity  TRUE  TRUE     TRUE    TRUE      TRUE    TRUE FALSE  TRUE  TRUE
+windex5    TRUE  TRUE     TRUE    TRUE      TRUE    TRUE FALSE  TRUE  TRUE
+HL4       FALSE FALSE    FALSE   FALSE     FALSE   FALSE  TRUE FALSE FALSE
+MT0        TRUE  TRUE     TRUE    TRUE      TRUE    TRUE FALSE  TRUE  TRUE
+WB2        TRUE  TRUE     TRUE    TRUE      TRUE    TRUE FALSE  TRUE  TRUE</code></pre>
+<p>Maybe not so much any more for <code>melevel</code> and <code>HH6</code> and for <code>melevel</code> and <code>delivery</code>, meaning that the educational level of the mother may not depend so much on the urban vs rural settings and that the mode of delivery in turn may not depend so much on the educational level of the mother.</p>
+</div>
 <div id="univariable-analysis" class="section level4">
 <h4>Univariable analysis</h4>
 <p>For given <code>x</code> and <code>y</code> variables of a given design <code>design</code>, the following function reorder the levels of the categorical <code>x</code> variable according to the effects of its levels on the the <code>y</code> variable:</p>

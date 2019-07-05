@@ -1,15 +1,17 @@
 ---
 title: "Missed opportunities of vaccination"
 csl: the-american-naturalist.csl
+editor_options:
+  chunk_output_type: console
 output:
   html_document:
     theme: cerulean
     toc: yes
   pdf_document:
     toc: yes
+  word_document:
+    toc: yes
 <!-- bibliography: references.bib -->
-editor_options: 
-  chunk_output_type: console
 ---
 
 <!--
@@ -570,6 +572,56 @@ as a function of the following variables:
 ```{r}
 x <- c("HH6", "HH7", "delivery", "melevel", "ethnicity", "windex5", "HL4", "WB2", "MT0")
 ```
+
+#### Independance between explanatory variables
+
+For the categorical variables (i.e. all except the age of the mother, `WB2`), we
+can perform a Wald test of 2 x 2 contingency table in order to generate pairwise
+matrix of independence:
+
+```{r}
+vars <- c(setdiff(x, "WB2"), "WB2")
+nb <- length(x)
+out <- matrix(numeric(nb * nb), nb, dimnames = list(vars, vars))
+for(i in 1:(nb - 1))
+  for(j in setdiff(1:(nb - 1), i))
+    out[i, j] <- svychisq(make_formula(c(vars[i], vars[j]), ""),
+                          subset(mics_survey, age_sel), "Wald")$p.value
+```
+
+For the only continuous variable, `WB2`, we can perform simple analyses of
+variance and add it to the matrix:
+
+```{r}
+out2 <-
+  sapply(vars[-length(vars)],
+         function(x)
+           anova(svyglm(make_formula(x, "WB2"), subset(mics_survey, age_sel)),
+                 svyglm(make_formula("1", "WB2"), subset(mics_survey, age_sel)),
+                 test = "Chisq")$p)
+out[nb, ] <- c(out2, 0)
+out[, nb] <- c(out2, 0)
+```
+
+The matrix looks like:
+
+```{r}
+round(out, 4)
+```
+
+We can see that the sex of the child (`HL4`) is the only variable that is
+independent from all the other ones. All the other variables are all highly
+dependent of each other. And this remains true even if we apply a Bonferroni
+correction for multiple tests:
+
+```{r}
+out < (.05 / 27)
+```
+
+Maybe not so much any more for `melevel` and `HH6` and for `melevel` and
+`delivery`, meaning that the educational level of the mother may not depend so
+much on the urban vs rural settings and that the mode of delivery in turn may
+not depend so much on the educational level of the mother.
 
 #### Univariable analysis
 
