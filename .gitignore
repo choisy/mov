@@ -4,3 +4,7 @@
 .Ruserdata
 wm.sav
 ch.sav
+.DS_Store
+*.rds
+*.pdf
+analysis0.Rmd
