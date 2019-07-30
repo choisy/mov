@@ -177,7 +177,7 @@ Downloading the MICS report:
 ```{r}
 mics_pdf <- "Vietnam Multiple Indicator Cluster Survey 2014.pdf"
 if (! file.exists(mics_pdf))
-  download.file("", mics_pdf)
+  download.file("http://bit.ly/mics_vn", mics_pdf)
 mics_report <- pdftools::pdf_text(mics_pdf)
 ```
 

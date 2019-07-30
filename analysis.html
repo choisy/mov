@@ -671,7 +671,7 @@ provinces &lt;- readRDS(gadm)</code></pre>
 <p>Downloading the MICS report:</p>
 <pre class="r"><code>mics_pdf &lt;- &quot;Vietnam Multiple Indicator Cluster Survey 2014.pdf&quot;
 if (! file.exists(mics_pdf))
-  download.file(&quot;&quot;, mics_pdf)
+  download.file(&quot;http://bit.ly/mics_vn&quot;, mics_pdf)
 mics_report &lt;- pdftools::pdf_text(mics_pdf)</code></pre>
 <p>Extracting provinces names per region from the table of page 429</p>
 <pre class="r"><code>provinces_per_region &lt;- mics_report[429] %&gt;%
