@@ -90,7 +90,9 @@ show_definitions <- function(df) {
 Laoding the children data set:
 
 ```{r}
-ch <- haven::read_sav("ch.sav") %>% 
+file <- "ch.sav"
+if (! file.exists(file)) download.file("http://bit.ly/ch_vn_2014", file)
+ch <- haven::read_sav(file) %>% 
   dplyr::select(starts_with("HH"), # cluster information
                 UF6, # fits with LN in mother's data set
                 chweight, # weight
@@ -108,6 +110,8 @@ ch <- haven::read_sav("ch.sav") %>%
 Loading the women data set:
 
 ```{r}
+file <- "wm.sav"
+if (! file.exists(file)) download.file("http://bit.ly/wm_vn_2014", file)
 wm <- haven::read_sav("wm.sav") %>% 
   dplyr::select(HH1, HH2, LN, # cluter information
                 WB2, # age of mother

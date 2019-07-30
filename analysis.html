@@ -439,7 +439,9 @@ library(survey)</code></pre>
     setNames(c(&quot;variable&quot;, &quot;definition&quot;))
 }</code></pre>
 <p>Laoding the children data set:</p>
-<pre class="r"><code>ch &lt;- haven::read_sav(&quot;ch.sav&quot;) %&gt;% 
+<pre class="r"><code>file &lt;- &quot;ch.sav&quot;
+if (! file.exists(file)) download.file(&quot;http://bit.ly/ch_vn_2014&quot;, file)
+ch &lt;- haven::read_sav(file) %&gt;% 
   dplyr::select(starts_with(&quot;HH&quot;), # cluster information
                 UF6, # fits with LN in mother&#39;s data set
                 chweight, # weight
@@ -453,7 +455,9 @@ library(survey)</code></pre>
                 dplyr::starts_with(&quot;IM19&quot;), # vitamin A campaign
                 dplyr::starts_with(&quot;CA3B&quot;), dplyr::starts_with(&quot;CA11&quot;)) # care</code></pre>
 <p>Loading the women data set:</p>
-<pre class="r"><code>wm &lt;- haven::read_sav(&quot;wm.sav&quot;) %&gt;% 
+<pre class="r"><code>file &lt;- &quot;wm.sav&quot;
+if (! file.exists(file)) download.file(&quot;http://bit.ly/wm_vn_2014&quot;, file)
+wm &lt;- haven::read_sav(&quot;wm.sav&quot;) %&gt;% 
   dplyr::select(HH1, HH2, LN, # cluter information
                 WB2, # age of mother
                 MT0, # has a mobile phone
