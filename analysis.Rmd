@@ -58,8 +58,8 @@ options(width = 137)
 Installing the required packages:
 
 ```{r}
-required <- c("dplyr", "haven", "lubridate", "magrittr", "pdftools", "purrr",
-              "rlang", "sf", "stringdist", "stringr", "survey", "tidyr")
+required <- c("dplyr", "haven", "lubridate", "magrittr", "pdftools", "purrr", "rlang",
+              "sf", "stringdist", "stringi", "stringr", "survey", "tidyr")
 to_install <- setdiff(required, row.names(installed.packages()))
 if (length(to_install)) install.packages(to_install)
 ```
@@ -151,31 +151,6 @@ if (! file.exists(gadm))
 provinces <- readRDS(gadm)
 ```
 
-Mapping the Vietnamese accents:
-
-```{r}
-dic <- setNames(as.data.frame(matrix(c("à", "a",
-                                       "ã", "a",
-                                       "á", "a",
-                                       "â", "a",
-                                       "ò", "o",
-                                       "ô", "o",
-                                       "ó", "o",
-                                       "í", "i",
-                                       "ì", "i",
-                                       "ê", "e",
-                                       "ú", "u"), ncol = 2, byrow = TRUE)), c("from", "to"))
-```
-
-A function to remove the accents of the Vietnamese names:
-
-```{r}
-translate <- function(x, dic) {
-  for(i in 1:nrow(dic)) x <- gsub(dic$from[i], dic$to[i], x)
-  x
-}
-```
-
 Downloading the MICS report:
 
 ```{r}
@@ -190,17 +165,24 @@ Extracting provinces names per region from the table of page 429
 ```{r}
 provinces_per_region <- mics_report[429] %>%
   sub("^.*List of Provinces\n", "", .) %>%
-  sub("MICS.*$", "", .) %>%
-  translate(dic) %>% 
+  sub("MICS.*$", "", .) %>%  
   stringr::str_split("\n") %>% 
   first() %>% 
-  lapply(stringr::str_sub, c(1, 11, 21, 59, 72, 81), c(10, 20, 58, 71, 80, 110)) %>%
-  lapply(trimws) %>%
-  do.call(rbind, .) %>%
+  strsplit("[[:blank:]]{2,}") %>% # works for all lines except line 14 (province name got cut in 2 parts)
+  lapply(trimws) %>% 
+  lapply(stringr::str_subset, "[:graph:]+") %>% # replaces slots with " *" by empty character string
+  purrr::map_at(purrr::detect_index(., function(x) length(x) == 7), # because slot 14 got 7 elements instead of 6
+                function(x) c(x[c(1:5)], paste0(x[6], " ", x[7]))) %>%
+  purrr::map_at(purrr::detect_index(., function(x) length(x) < 6), 
+                function(x) rep(x, len = 6)) %>% # needed by the do.call(rbind, .) call that follows
+  purrr::discard(function(x) length(x) < 6) %>% # remove slots empty character (see lapply call above)
+  do.call(rbind, .) %>% 
   as.data.frame(stringsAsFactors = FALSE) %>% 
-  `[`(-c(1, nrow(.)), ) %$% # the first row is the heading and the last one in empty
-  c(.$V3, .$V6) %>% 
-  `[`(-length(.)) # the last element is not a province
+  select(V3, V6) %>% # province names are in these two columns
+  filter(V3 != "Name") %>% # remove header line
+  unlist() %>%
+  stringi::stri_trans_general("latin-ascii") %>% # remove accents
+  grep("[[:alpha:]]", ., value = TRUE)
 ```
 
 Extracting the position of the regions' names:

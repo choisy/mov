@@ -419,8 +419,8 @@ title wherever you want to display the reference list.
 <div id="packages" class="section level2">
 <h2>Packages</h2>
 <p>Installing the required packages:</p>
-<pre class="r"><code>required &lt;- c(&quot;dplyr&quot;, &quot;haven&quot;, &quot;lubridate&quot;, &quot;magrittr&quot;, &quot;pdftools&quot;, &quot;purrr&quot;,
-              &quot;rlang&quot;, &quot;sf&quot;, &quot;stringdist&quot;, &quot;stringr&quot;, &quot;survey&quot;, &quot;tidyr&quot;)
+<pre class="r"><code>required &lt;- c(&quot;dplyr&quot;, &quot;haven&quot;, &quot;lubridate&quot;, &quot;magrittr&quot;, &quot;pdftools&quot;, &quot;purrr&quot;, &quot;rlang&quot;,
+              &quot;sf&quot;, &quot;stringdist&quot;, &quot;stringi&quot;, &quot;stringr&quot;, &quot;survey&quot;, &quot;tidyr&quot;)
 to_install &lt;- setdiff(required, row.names(installed.packages()))
 if (length(to_install)) install.packages(to_install)</code></pre>
 <p>Loading the packages required for interactive use:</p>
@@ -656,23 +656,6 @@ mics &lt;- left_join(ch, wm, c(&quot;HH1&quot;, &quot;HH2&quot;, &quot;UF6&quot;
 if (! file.exists(gadm))
   download.file(&quot;https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_1_sf.rds&quot;, gadm)
 provinces &lt;- readRDS(gadm)</code></pre>
-<p>Mapping the Vietnamese accents:</p>
-<pre class="r"><code>dic &lt;- setNames(as.data.frame(matrix(c(&quot;à&quot;, &quot;a&quot;,
-                                       &quot;ã&quot;, &quot;a&quot;,
-                                       &quot;á&quot;, &quot;a&quot;,
-                                       &quot;â&quot;, &quot;a&quot;,
-                                       &quot;ò&quot;, &quot;o&quot;,
-                                       &quot;ô&quot;, &quot;o&quot;,
-                                       &quot;ó&quot;, &quot;o&quot;,
-                                       &quot;í&quot;, &quot;i&quot;,
-                                       &quot;ì&quot;, &quot;i&quot;,
-                                       &quot;ê&quot;, &quot;e&quot;,
-                                       &quot;ú&quot;, &quot;u&quot;), ncol = 2, byrow = TRUE)), c(&quot;from&quot;, &quot;to&quot;))</code></pre>
-<p>A function to remove the accents of the Vietnamese names:</p>
-<pre class="r"><code>translate &lt;- function(x, dic) {
-  for(i in 1:nrow(dic)) x &lt;- gsub(dic$from[i], dic$to[i], x)
-  x
-}</code></pre>
 <p>Downloading the MICS report:</p>
 <pre class="r"><code>mics_pdf &lt;- &quot;Vietnam Multiple Indicator Cluster Survey 2014.pdf&quot;
 if (! file.exists(mics_pdf))
@@ -681,17 +664,24 @@ mics_report &lt;- pdftools::pdf_text(mics_pdf)</code></pre>
 <p>Extracting provinces names per region from the table of page 429</p>
 <pre class="r"><code>provinces_per_region &lt;- mics_report[429] %&gt;%
   sub(&quot;^.*List of Provinces\n&quot;, &quot;&quot;, .) %&gt;%
-  sub(&quot;MICS.*$&quot;, &quot;&quot;, .) %&gt;%
-  translate(dic) %&gt;% 
+  sub(&quot;MICS.*$&quot;, &quot;&quot;, .) %&gt;%  
   stringr::str_split(&quot;\n&quot;) %&gt;% 
   first() %&gt;% 
-  lapply(stringr::str_sub, c(1, 11, 21, 59, 72, 81), c(10, 20, 58, 71, 80, 110)) %&gt;%
-  lapply(trimws) %&gt;%
-  do.call(rbind, .) %&gt;%
+  strsplit(&quot;[[:blank:]]{2,}&quot;) %&gt;% # works for all lines except line 14 (province name got cut in 2 parts)
+  lapply(trimws) %&gt;% 
+  lapply(stringr::str_subset, &quot;[:graph:]+&quot;) %&gt;% # replaces slots with &quot; *&quot; by empty character string
+  purrr::map_at(purrr::detect_index(., function(x) length(x) == 7), # because slot 14 got 7 elements instead of 6
+                function(x) c(x[c(1:5)], paste0(x[6], &quot; &quot;, x[7]))) %&gt;%
+  purrr::map_at(purrr::detect_index(., function(x) length(x) &lt; 6), 
+                function(x) rep(x, len = 6)) %&gt;% # needed by the do.call(rbind, .) call that follows
+  purrr::discard(function(x) length(x) &lt; 6) %&gt;% # remove slots empty character (see lapply call above)
+  do.call(rbind, .) %&gt;% 
   as.data.frame(stringsAsFactors = FALSE) %&gt;% 
-  `[`(-c(1, nrow(.)), ) %$% # the first row is the heading and the last one in empty
-  c(.$V3, .$V6) %&gt;% 
-  `[`(-length(.)) # the last element is not a province</code></pre>
+  select(V3, V6) %&gt;% # province names are in these two columns
+  filter(V3 != &quot;Name&quot;) %&gt;% # remove header line
+  unlist() %&gt;%
+  stringi::stri_trans_general(&quot;latin-ascii&quot;) %&gt;% # remove accents
+  grep(&quot;[[:alpha:]]&quot;, ., value = TRUE)</code></pre>
 <p>Extracting the position of the regions’ names:</p>
 <pre class="r"><code>regions &lt;- names(attr(ch$HH7, &quot;labels&quot;))
 regions_pos &lt;- which(stringr::str_extract(provinces_per_region, &quot;^.{3}&quot;) %in% unique(stringr::str_extract(regions, &quot;^.{3}&quot;)))</code></pre>
