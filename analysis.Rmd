@@ -1,5 +1,5 @@
 ---
-title: "Missed opportunities of vaccination"
+title: "Missed opportunities of vaccination in Vietnam, 2014"
 csl: the-american-naturalist.csl
 editor_options:
   chunk_output_type: console
@@ -46,8 +46,7 @@ knitr::knit_hooks$set(
     options(prompt = if (options$engine %in% c("sh", "bash")) "$ " else "> ")
   })
 
-knitr::opts_chunk$set(margin = TRUE, prompt = TRUE, comment = "", message = FALSE,
-                      collapse = TRUE, cache = FALSE, autodep = TRUE,
+knitr::opts_chunk$set(cache = FALSE, autodep = TRUE, message = FALSE, warning = FALSE,
                       dev.args = list(pointsize = 11), fig.height = 3.5,
                       fig.width = 4.24725, fig.retina = 2, fig.align = "center")
 
@@ -59,23 +58,21 @@ options(width = 137)
 Installing the required packages:
 
 ```{r}
-required <- c("dplyr", "haven", "lubridate", "magrittr", "purrr", "survey", "tidyr")
+required <- c("dplyr", "haven", "lubridate", "magrittr", "pdftools", "purrr",
+              "rlang", "sf", "stringdist", "stringr", "survey", "tidyr")
 to_install <- setdiff(required, row.names(installed.packages()))
 if (length(to_install)) install.packages(to_install)
 ```
 
-Loading the required packages:
+Loading the packages required for interactive use:
 
 ```{r}
-library(magrittr)
 library(dplyr)
+library(sf)
 library(survey)
-library(lubridate)
-library(tidyr)
-library(purrr)
 ```
 
-## Laoding and merging the data
+## Loading and merging the data
 
 The following function retrieves the definitions of the variables of a data frame:
 
@@ -94,20 +91,18 @@ Laoding the children data set:
 
 ```{r}
 ch <- haven::read_sav("ch.sav") %>% 
-  dplyr::select(starts_with("AG1"), # birth date
-                AG2, # age
-                starts_with("CA3B"), starts_with("CA11"), # care
-                starts_with("HF13"), # immunization info from health facility
-                starts_with("HH"), # cluster information 
-                starts_with("IM3"), # immunization info from vaccination card
-                starts_with("IM19"), # vitamin A campaign
-                starts_with("UF8"), # date of survey
+  dplyr::select(starts_with("HH"), # cluster information
                 UF6, # fits with LN in mother's data set
-                HL4, # sex
                 chweight, # weight
                 ethnicity, # ethnicity
+                HL4, # sex
+                AG2, # age
                 melevel, # mother's education level
-                windex5) # wealth index quintile
+                windex5, # wealth index quintile
+                dplyr::starts_with("HF13"), # immunization info from health facility
+                dplyr::starts_with("IM3"), # immunization info from vaccination card
+                dplyr::starts_with("IM19"), # vitamin A campaign
+                dplyr::starts_with("CA3B"), dplyr::starts_with("CA11")) # care
 ```
 
 Loading the women data set:
@@ -136,17 +131,155 @@ show_definitions(wm)
 for the women. Merging the children and women data sets:
 
 ```{r}
-attributes(ch$UF6) <- NULL # for the left_join
-attributes(wm$LN) <- NULL # for the left_join
+attributes(ch$UF6) <- NULL # for the left_join() call
+attributes(wm$LN) <- NULL # for the left_join() call
 mics <- left_join(ch, wm, c("HH1", "HH2", "UF6" = "LN"))
+```
+
+## Mapping the regions
+
+Downloading the map of the provinces of Vietnam:
+
+```{r}
+gadm <- "gadm36_VNM_1_sf.rds"
+if (! file.exists(gadm))
+  download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_1_sf.rds", gadm)
+provinces <- readRDS(gadm)
+```
+
+Mapping the Vietnamese accents:
+
+```{r}
+dic <- setNames(as.data.frame(matrix(c("à", "a",
+                                       "ã", "a",
+                                       "á", "a",
+                                       "â", "a",
+                                       "ò", "o",
+                                       "ô", "o",
+                                       "ó", "o",
+                                       "í", "i",
+                                       "ì", "i",
+                                       "ê", "e",
+                                       "ú", "u"), ncol = 2, byrow = TRUE)), c("from", "to"))
+```
+
+A function to remove the accents of the Vietnamese names:
+
+```{r}
+translate <- function(x, dic) {
+  for(i in 1:nrow(dic)) x <- gsub(dic$from[i], dic$to[i], x)
+  x
+}
+```
+
+Downloading the MICS report:
+
+```{r}
+mics_pdf <- "Vietnam Multiple Indicator Cluster Survey 2014.pdf"
+if (! file.exists(mics_pdf))
+  download.file("", mics_pdf)
+mics_report <- pdftools::pdf_text(mics_pdf)
+```
+
+Extracting provinces names per region from the table of page 429
+
+```{r}
+provinces_per_region <- mics_report[429] %>%
+  sub("^.*List of Provinces\n", "", .) %>%
+  sub("MICS.*$", "", .) %>%
+  translate(dic) %>% 
+  stringr::str_split("\n") %>% 
+  first() %>% 
+  lapply(stringr::str_sub, c(1, 11, 21, 59, 72, 81), c(10, 20, 58, 71, 80, 110)) %>%
+  lapply(trimws) %>%
+  do.call(rbind, .) %>%
+  as.data.frame(stringsAsFactors = FALSE) %>% 
+  `[`(-c(1, nrow(.)), ) %$% # the first row is the heading and the last one in empty
+  c(.$V3, .$V6) %>% 
+  `[`(-length(.)) # the last element is not a province
+```
+
+Extracting the position of the regions' names:
+
+```{r}
+regions <- names(attr(ch$HH7, "labels"))
+regions_pos <- which(stringr::str_extract(provinces_per_region, "^.{3}") %in% unique(stringr::str_extract(regions, "^.{3}")))
+```
+
+Rearranging the provinces per region:
+
+```{r}
+provinces_per_region2 <- regions_pos %>%
+  purrr::map2(., c((. - 1)[-1], length(provinces_per_region)), seq) %>% 
+  lapply(function(x) provinces_per_region[x[-1]]) %>% 
+  setNames(provinces_per_region[regions_pos])
+```
+
+Performing the approximate string matching:
+
+```{r}
+approxmatching <- data.frame(raw = unlist(provinces_per_region2),
+                             matched = provinces$VARNAME_1[stringdist::amatch(unlist(provinces_per_region2),
+                                                                              provinces$VARNAME_1, maxDist = 10)],
+                             stringsAsFactors = FALSE)
+```
+
+One single manual fix is needed:
+
+```{r}
+approxmatching[approxmatching$raw == "Binh D ng", "matched"] <- "Binh Duong"
+```
+
+Mapping the regions:
+
+```{r fig.height = 1.5 * 3.5, fig.width = 2 * 4.24725}
+left_join(provinces,
+          data.frame(VARNAME_1 = approxmatching$matched,
+                     region = sub("\\d+", "", rownames(approxmatching)),
+                     stringsAsFactors = FALSE), by = "VARNAME_1") %>% 
+  select(region) %>%
+  plot(main = NA, key.pos = NULL)
+legend("left", legend = regions[c(2, 1, 3:6)],
+       fill = sf.colors(6, categorical = TRUE)[c(4, 5, 3, 1, 6, 2)], bty = "n")
 ```
 
 ## Preparing the data
 
-The function `nbdoses()` below computes the number of vaccines doses. `df` is a
-MICS children table and `pattern` is the pattern that characterize the vaccines
-columns. For each vaccine, there are 3 of these columns, one for year, one for
-month and one for the day of vaccination. There are also code for missing
+The function below removes the attributes of all the variables of a data frame,
+which is required before the `gather()` calls:
+
+```{r}
+remove_attributes <- function(df) {
+  require(magrittr)
+  df %>%
+    lapply(`attributes<-`, NULL) %>%
+    as.data.frame()
+}
+```
+
+### Calculating the number of doses for each vaccine
+
+In the MiCS data we have information for 8 vaccines -- of which we will study
+the MOV --, as well as 2 vitamin A shots (that will be considered for the
+computation of the MOVs). The number of doses indicated in the table below are
+the required number of doses. Note that these required numbers of doses are
+expected to be given by the age of 1 year-old.
+
+vaccine                                                           | MICS code        | number of doses
+----------------------------------------------------------------- | ---------------- | ---------------
+BCG                                                               | B                | 1
+Polio                                                             | P1, P2, P3       | 3
+*Haemophilus influenzae* type B                                   | I1, I2, I3       | 3
+Hepatitis B at birth                                              | H0               | 1
+Hepatitis B                                                       | H1, H2, H3       | 3
+MMR (measles + mumps + rubeola)                                   | M                | 1
+DTP (dipheteria + tetanus + pertussis)                            | D1, D2, D3       | 3
+Pentavalent (DTP + hepatitis B + *Haemophilus influenzae* type B) | PEN1, PEN2, PEN3 | 3
+Vitamin A first dose                                              | V1               | 1
+Vitamin A second dose                                             | V2               | 1
+
+In the MICS data, the information for each vaccine dose is coded by 3 column:
+the day, the month and the year of the shot. There are also code for missing
 values. These codes are:
 
 ```{r}
@@ -160,27 +293,15 @@ both date information and missing value code are missing):
 any(is.na(ch$IM3BD))
 ```
 
-The function below remove the attributes of all the variables of a data frame:
-
-```{r}
-remove_attributes <- function(df) {
-  df %>%
-    lapply(`attributes<-`, NULL) %>%
-    as.data.frame()
-}
-```
-
-The function below considers that there was absence of vaccination when the YMD
+The function `nbdoses()` considers that there was absence of shot when the YMD 
 date of the vaccine was `NA-NA-NA`, `NA-NA-0`, or `0-0-0`. Everything else was
-interpreted as presence of vaccination. Furthermore, some vaccine have several
-doses. The total numbers of doses are counted. The series `IM3` and `HF13` have
-the vaccines `B`, `D`, `H`, `H0`, `I`, `M`, `P`, `PEN` and the vitamins `V1` and
-`V2`. It means that
+interpreted as presence of vaccination. Note that 
 
 * `H0` has to be distinguished from the 3 doses of `H`: `H1`, `H2` and `H3`;
 * `V1` and `V2` shouldn't be combined as if there were doses of a same vaccine.
 
-This is dealt with in the function below.
+Here is the code of the `nbdoses()` function where `df` is a MICS children table
+and `pattern` is the pattern that characterize the vaccines columns:
 
 ```{r}
 nbdoses <- function(df, pattern) {
@@ -189,20 +310,20 @@ nbdoses <- function(df, pattern) {
   df %>% 
     select(matches(pattern)) %>% 
     mutate(id = row_number()) %>%
-    remove_attributes() %>% # needed by the gather() call.
+    remove_attributes() %>% # needed by the gather() call that follows
     gather("key", "value", -id) %>% 
     mutate(vaccine = sub("(.*).$", "\\1", key),
            time = sub(".*(.)$", "\\1", key)) %>% 
     select(-key) %>% 
     spread(time, value) %>% 
     unite("date", Y, M, D) %>% 
-    mutate_at("date", na_if, "NA_NA_NA") %>% 
-    mutate_at("date", na_if, "NA_NA_0") %>% 
-    mutate_at("date", na_if, "0_0_0") %>% 
-    mutate_at("date", ~!is.na(.)) %>% 
+    mutate_at("date", na_if, "NA_NA_NA") %>% # here we specify the cases
+    mutate_at("date", na_if, "NA_NA_0") %>%  # that are considered as
+    mutate_at("date", na_if, "0_0_0") %>%    # absence of vaccination
+    mutate_at("date", ~!is.na(.)) %>%        # (this has been checked).
     mutate(vaccine = vaccine %>%
              sub("(.*H0)", "\\10", .) %>% # to protect H0 (that is different from H)
-             sub("(.*V\\d)", "\\10", .) %>% # to protect vitamins (we don't want to combine them here)
+             sub("(.*V\\d)", "\\10", .) %>% # to protect vitamins (that are use to compute MOVs)
              sub("\\d$", "", .)) %>% 
     group_by(id, vaccine) %>%
     summarise(n = sum(date)) %>%
@@ -218,14 +339,14 @@ Let's try an example:
 nbdoses(ch, "^IM3|^HF13")
 ```
 
-The function `combine_series()` below works on an output of the previous function
-and combines the number of doses from 2 series. The combination is obvious when
-the number of doses from one series are 0 or when the numbers of doses from the
-2 series are identical. In other situation, it is not clear what we should do.
-The function `nbdoses_selection()` below is used by `combine_series()` and is the
-one that deals with the choices on the numbers of doses when we combine the 2
-series. The choice is regulated by the arguments `exclude_inconsistencies` and
-`keep_min`:
+The function `combine_series()` below works on an output of the previous
+function and combines the numbers of doses from 2 series. The combination is 
+obvious when the number of doses from one series are 0 or when the numbers of
+doses from the 2 series are identical. In other situation, it is not clear what
+we should do. The function `nbdoses_selection()` below is used by 
+`combine_series()` and is the one that deals with the choices on the numbers of
+doses when we combine the 2 series. The choice is regulated by the arguments 
+`exclude_inconsistencies` and `keep_min`:
 
 * if `exclude_inconsistencies = TRUE` all inconsistencies are excluded and the
 final number of doses for this vaccine will be `NA`
@@ -237,27 +358,31 @@ final number of doses for this vaccine will be `NA`
        
 ```{r}
 nbdoses_selection <- function(df, exclude_inconsistencies = TRUE, keep_min = TRUE) {
+  require(dplyr)
   if (exclude_inconsistencies) return(mutate(filter(df, series1 == series2), nb_doses = series1))
   if (keep_min) return(mutate(df, nb_doses = ifelse(series1 < series2, series1, series2)))
   mutate(df, nb_doses = ifelse(series1 > series2, series1, series2))
 }
 ```
 
-This function is used by the following function combines the number of doses
-from `IM3` and `HF13` according to a number of options passed to `nbdoses_seletion()`:
+Here is the code of the `combine_series()` function that uses the
+`nbdoses_seletion()` function:
 
 ```{r}
-combine_series <- function(df, pattern = "IM3|HF13", exclude_inconsistencies = TRUE, keep_min = TRUE) {
+combine_series <- function(df, pattern, exclude_inconsistencies = TRUE, keep_min = TRUE) {
+  require(dplyr)
+  require(tidyr)
   df %>% 
     mutate(id = row_number()) %>% 
+    remove_attributes() %>% # needed by the gather() call that follows
     gather("key", "value", -id) %>% 
-    mutate(series = sub(paste0("(", pattern, ").*"), "\\1", key),
+    mutate(series  = sub(paste0("(", pattern, ").*"), "\\1", key),
            vaccine = sub(pattern, "", key)) %>% 
     select(-key) %>% 
     group_by(vaccine, id) %>% 
     spread(series, value) %>% 
     ungroup() %>% 
-    setNames(c("id", "vaccine", "series1", "series2")) %>% # for the nbdoses_selection() call
+    setNames(c("id", "vaccine", "series1", "series2")) %>% # for the nbdoses_selection() call that follows
     nbdoses_selection(exclude_inconsistencies, keep_min) %>% 
     select(-series1, -series2) %>% 
     spread(vaccine, nb_doses) %>% 
@@ -265,121 +390,68 @@ combine_series <- function(df, pattern = "IM3|HF13", exclude_inconsistencies = T
 }
 ```
 
-Let's try it:
+Let's try it when replacing all inconsistencies by NAs:
 
 ```{r}
 ch %>%
   nbdoses("^IM3|^HF13") %>% 
-  combine_series()
+  combine_series("^IM3|^HF13")
 ```
 
-It is common that we want to perform an analysis for a specific age class. The
-subset of the data set needs to be done once the data frame is already converted
-into an object of class `survey` (see below). What we need to do at this stage is
-computing a boolean variable specifying whether the row (child) will be selected
-in or out in the subsequent analysis. The difficulty here lays in that the dates
-of birth (from which ages are calculated) are sometimes incomplete. For some of
-these incomplete dates of birth, it is still possible to ascertain whether the
-child should or should not be included in the analysis, this is what the function
-below does. When it is not possible to ascertain whether the child should or
-should not be included in the analysis, `NA` is given. Here, the date of birth is
-coded by `AG1Y`, `AG1M` and `AG1D` and the date of the survey is coded by `UF8DY`,
-`UF8M` and `UF8D`. Furthermore, it appears that whenever `AG1D` is missing, 
-`AG1M` and `AG1Y` are also missing:
+Considering the minimal value in case of inconsistency:
 
 ```{r}
-ch %>% 
-  filter(is.na(AG1D)) %>% 
-  select(AG1Y, AG1M, AG1D) %>% 
-  unique()
+ch %>%
+  nbdoses("^IM3|^HF13") %>% 
+  combine_series("^IM3|^HF13", FALSE)
 ```
 
-Furthermore, whenever the day of birth is not missing, the month and the year of
-birth are not missing either:
+Considering the maximal value in case of inconsistency:
 
 ```{r}
-ch %>% 
-  filter(!is.na(AG1D), is.na(AG1M) | is.na(AG1Y)) %>% 
-  nrow()
+ch %>%
+  nbdoses("^IM3|^HF13") %>% 
+  combine_series("^IM3|^HF13", FALSE, FALSE)
 ```
 
-Here are the values of the day of birth:
+### Computing MOVs
 
-```{r}
-sort(unique(ch$AG1D))
-attr(ch$AG1D, "labels")
-```
+Below are the missed opportunities of vaccination (MOVs) that we will consider:
 
-Here are the values of the month of birth:
+vaccine                           | missed opportunity with | code
+--------------------------------- | ----------------------- | ----
+BCG                               | post-natal check        | mov1
+hepatitis B at birth              | post-natal check        | mov2
+polio                             | non-campaign vitamin A  | mov4
+measles                           | non-campaign vitamin A  | mov6
+polio                             | campaign vitamin A      | mov8
+measles                           | campaign vitamin A      | mov10
+polio                             | curative care           | mov12
+measles                           | curative care           | mov14
+DTP (diphteria, tetanus, rubeola) | non-campaign vitamin A  | mov15
+DTP (diphteria, tetanus, rubeola) | curative care           | mov16
+DTP (diphteria, tetanus, rubeola) | campaign vitamin A      | mov17
+DTP or polio or BCG               | measles                 | mov18
+BCG or hepatitis B at birth       | post-natal check        | mov_nn
+polio or measles or DTP           | non-campaign vitamin A  | mov_pc
+polio or measles or DTP           | campaign vitamin A      | mov_ca
+polio or measles or DTP           | currative care          | mov_cc
 
-```{r}
-sort(unique(ch$AG1M))
-attr(ch$AG1M, "labels")
-```
-
-Here are the values of the year of birth:
-
-```{r}
-sort(unique(ch$AG1Y))
-```
-
-Here the code of the `age_selection()` that computes the age-based seletion
-variable:
-
-```{r}
-age_selection <- function(df, age1 = 365, age2 = 2 * 365) {
-  lastdayofthemonth <- c(31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
-  dmy <- function(...) lubridate::dmy(..., quiet = TRUE) # for these age that cannot be parsed.
-  df %>% 
-    mutate(AG1D = ifelse(AG1M %in% c(4, 6, 9, 11) & AG1D == 31, 30, # correct days for March, June, Sept and Nov.
-                         ifelse(AG1Y %in% c(2009:2011, 2013, 2014) & AG1M == 2 & AG1D %in% 29:30, 28, # correct days for Feb.
-                                ifelse(AG1Y %in% c(2008, 2012) & AG1M == 2 & AG1D == 30, 29, AG1D))), # correct days for Feb.
-           date_survey = dmy(paste0(UF8D, "-", UF8M, "-", UF8Y)),
-           age = as.numeric(date_survey - dmy(paste0(AG1D, "-", AG1M, "-", AG1Y))), # try to compute age
-           age1min = as.numeric(date_survey - dmy(paste0("31-12-", AG1Y))), # age range when the month is undetermined
-           age1max = as.numeric(date_survey - dmy(paste0("01-01-", AG1Y))),
-           age2min = as.numeric(date_survey - dmy(paste0(lastdayofthemonth[AG1M], AG1M, "-", AG1Y))), # age range when the month is determined
-           age2max = as.numeric(date_survey - dmy(paste0("01-", AG1M, "-", AG1Y))),
-           age_sel = ifelse(is.na(age),
-                            ifelse(is.na(AG1D),
-                                   NA, # Note: if the day is missing, the month and the year are also missing (i.e. no date)
-                                   ifelse(AG1M > 12, # undeterminated month
-                                          ifelse(age1max < age1 | age2 - 1 < age1min, # tests if outside
-                                                 FALSE,
-                                                 ifelse(age1 - 1 < age1min & age1max < age2, # tests if inside
-                                                        TRUE,
-                                                        NA)),
-                                  # determined month:        
-                                          ifelse(age2max < age1 | age2 - 1 < age2min, # tests if outside
-                                                 FALSE,
-                                                 ifelse(age1 - 1 < age2min & age2max < age2, # tests if inside
-                                                        TRUE,
-                                                        NA)))),
-                            age1 - 1 < age & age < age2)) %>% 
-    select(age_sel) %>% 
-    unlist()
-}
-```
-
-Let's try it:
-
-```{r}
-age_selection(ch) %>% 
-  table(useNA = "always")
-```
 
 The following function returns whether there has been a missed opportunity of
 vaccination which is the absence of vaccination in the presence of care. This
-rule needs to be protected so that `NA` instead of `TRUE` is returned when one of
-care and vaccination is `NA` and the other one `TRUE`.
+rule needs to be protected so that `NA` instead of `FALSE` is returned when one
+of care and vaccination is `NA` and the other one `FALSE`.
 
 ```{r}
 mov <- function(care, vacc) {
-  if_else(is.na(care) | is.na(vacc), NA, care & (vacc < 1))
+  if_else(is.na(care) | is.na(vacc), NA, care & ! vacc)
 }
 ```
 
-Below, we are ssembling everything that precedes into a pipeline that prepares
+### Data preparation pipeline
+
+Below, we are assembling everything that precedes into a pipeline that prepares
 the data. Note that all but the age of the mother (`WB2`) of the explanatory
 variable are categorical. For two of these variables (mother education level 
 `melevel` and wealth index quintile `windex5`), the levels should obviously
@@ -388,160 +460,196 @@ be re-ordered at the analysis stage according to the magnitude of their effect
 (see function `ordered_levels()` below).
 
 ```{r}
-mics_survey <- mics %>%
-# 1 - computes vaccines doses:
-  (function(x) lapply(list(function(y) select(y, -matches("^IM3|^HF13")),
-                           function(y) combine_series(nbdoses(y, "^IM3|^HF13"))),
-                      function(f) f(x))) %>% 
-  bind_cols() %>%
-  mutate(
-# 2 - variables recoding:
-    IM19A = na_if(IM19A,"8"), IM19A = na_if(IM19A,"9"), IM19A = IM19A == "1",
-    IM19B = na_if(IM19B,"8"), IM19B = na_if(IM19B,"9"), IM19B = IM19B == "1",
-    HH6 = recode(unclass(HH6), "1" = "urban", "2" = "rural"),
-    HH7 = recode(unclass(HH7),
-                 "1" = "Red River Delta",
-                 "2" = "Northern Midlands and Mountain area",
-                 "3" = "North Central and Central Coastal area",
-                 "4" = "Central Highlands",
-                 "5" = "South East",
-                 "6" = "Mekong River Delta"),
-    melevel = factor(recode(unclass(na_if(melevel, "9")),
-                            "0" = "None",
-                            "1" = "Primary",
-                            "2" = "Lower secondary",
-                            "3" = "Upper Secondary",
-                            "4" = "Tertiary"), c("None", "Primary", "Lower Secondary",
-                                                 "Upper Secondary", "Tertiary")),
-    ethnicity = recode(unclass(ethnicity),
-                       "1" = "Kinh",
-                       "2" = "Non-Kinh"),
-    windex5 = factor(recode(unclass(na_if(windex5, 0)),
-                            "1" = "Poorest",
-                            "2" = "Second",
-                            "3" = "Middle",
-                            "4" = "Fourth",
-                            "5" = "Richest"), c("Poorest", "Second", "Middle",
-                                                "Fourth", "Richest")),
-    HL4 = recode(unclass(HL4),
-                 "1" = "Male",
-                 "2" = "Female"),
-    MT0 = recode(unclass(MT0),
-                 "1" = "Owns a mobile phone",
-                 "2" = "Doesnt own a mobile phone"),
-# 3 - computes age selection:
-    age_sel = age_selection(.),
-# 4 - curative care:
-    curative_care = trimws(paste(CA11A, CA11B, CA11C, CA11E, CA11F, CA11I, CA11J,
-                                 CA3BA, CA3BB, CA3BC, CA3BE, CA3BF, CA3BI, CA3BJ)) != "",
-# 5 - post-natal check:
-    post_natal_check = ifelse(PN13A == "" & PN13B == "",
-                              FALSE,
-                              ifelse(PN13A == "?" & PN13B == "?",
-                                     NA,
-                                     TRUE)),
-# 6 - delivery:
-    delivery = ifelse(is.na(MN18), ## because there are uncoded missing values
-                      NA,
-                      ifelse(MN18 < 13,
+recode2 <- function(x) {
+  labels <- attr(x, "labels")
+  unname(setNames(names(labels), labels)[as.character(x)])
+}
+```
+
+Questions:
+
+* how are missing values dealt with for vitamin A?
+* how are missing values dealt with for vaccine shots?
+
+The pipeline function:
+
+```{r}
+data_preparation <- function(df, pattern = "^IM3|^HF13", exclude_inconsistencies = TRUE, keep_min = TRUE) {
+  df %>%
+# 0 - computes vaccines doses:
+    (function(x) lapply(list(function(y) select(y, -matches(pattern)),
+                             function(y) combine_series(nbdoses(y, pattern), pattern, exclude_inconsistencies, keep_min)),
+                        function(f) f(x))) %>% 
+    bind_cols() %>%
+# 1 - replacing DK and missing by NAs:
+    mutate(IM19A   = na_if(IM19A, 8), IM19A = na_if(IM19A, 9), # Vitamin A campaign in June 2013
+           IM19B   = na_if(IM19B, 8), IM19B = na_if(IM19B, 9), # Vitamin A campaign in December 2012/2013
+           melevel = na_if(melevel, 9), # Mother's education level
+# 2 - curative care:
+           curative_care = trimws(paste(CA11A, CA11B, CA11C, CA11E, CA11F, CA11I, CA11J,
+                                        CA3BA, CA3BB, CA3BC, CA3BE, CA3BF, CA3BI, CA3BJ)) != "",
+# 3 - post-natal check:
+           post_natal_check = ifelse(PN13A == "" & PN13B == "",
+                                     FALSE,
+                                     ifelse(PN13A == "?" & PN13B == "?",
+                                            NA,
+                                            TRUE)),
+# 4 - delivery:
+           delivery = ifelse(MN18 < 13,
                              "home",
                              ifelse(MN18 > 13 & MN18 < 27,
                                     "public",
                                     ifelse(MN18 > 27 & MN18 < 37,
                                            "private",
-                                           NA)))), # these are the coded missing values
-# 7 - vaccination combinations:
-    PEND = (PEN + D > 2) | (D > 2),
-    PENDPB = ! (PEND < 1 | P < 1 | B < 1),
-# 8 - MOVs:
-    mov1 = mov(post_natal_check, B),
-    mov2 = mov(post_natal_check, H0),
-    mov4 = mov(V1, P),
-    mov6 = mov(V2, M),
-    mov8 = mov(IM19B, P),
-    mov10 = mov(IM19A, M),
-    mov12 = mov(curative_care, P),
-    mov14 = mov(curative_care, M),
-    mov15 = mov(V1, PEND),
-    mov16 = mov(curative_care, PEND),
-    mov17 = mov(IM19B, PEND),
-    mov18 = mov(M, PENDPB),
-    mov_nn = mov1 | mov2,
-    mov_pc = mov4 | mov6 | mov15, 
-    mov_ca = mov8 | mov10 | mov17,
-    mov_cc = mov12 | mov14 | mov16 | mov18, 
-    vaccine_status = B & M & PEND & (P > 2)) %>%
-  mutate(mov_any = select(., matches("^mov\\d")) %>% apply(1, any), # has to be in a separate mutate call because relies on the whole data frame
-         mov_any2 = select(., matches("^mov\\d"), -mov2) %>% apply(1, any)) %>% 
-  select(starts_with("mov"), vaccine_status, starts_with("HH"), "chweight",
-         "delivery", "melevel", "ethnicity", "windex5", "HL4", "WB2", "MT0", "age_sel") %>% 
-  survey::svydesign(~ HH1 + HH2, strata = ~ HH6 + HH7, weights = ~ chweight, data = .)
+                                           NA))),
+# 5 - computing vaccination:
+           PEND = coalesce(PEN, 0L) + coalesce(D, 0L) > 2) %>% # DTP
+    mutate_at(c("B", "H0", "I", "M"), `>`, 0) %>% # NA are kept NA
+    mutate_at(c("D", "H", "P", "PEN"), `>`, 2) %>% # NA are kept NA
+    mutate_at(vars(starts_with("IM19")), `<`, 2) %>% # Vit A campaigns: DK and missing are considered FALSE
+    mutate_at(vars(starts_with("V")), `>`, 0) %>% # non-campaign vitamin A
+# 6 - computing MOVs:
+    mutate(mov1   = mov(post_natal_check, B), # BCG
+           mov2   = mov(post_natal_check, H0), # hepatitis B at birth
+           mov4   = mov(V1, P), # polio with non-campaign vitamin A
+           mov6   = mov(V2, M), # measles with non-campaign vitamin A
+           mov8   = mov(IM19B, P), # polio with campaign vitamin A
+           mov10  = mov(IM19A, M), # measles with campaign vitamin A
+           mov12  = mov(curative_care, P), # polio
+           mov14  = mov(curative_care, M), # measles
+           mov15  = mov(V1, PEND), # DTP (diphteria, tetanus, rubeola) with non-campaign vitamin A
+           mov16  = mov(curative_care, PEND), # DTP (diphteria, tetanus, rubeola)
+           mov17  = mov(IM19B, PEND), # DTP (diphteria, tetanus, rubeola) with campaign vitamin A
+           mov18  = mov(M, apply(! select(., B, P, PEND), 1, any)), # received measles but at least one of DTP, polio and BCG is missing
+           mov_nn = mov1 | mov2, # BCG ou hepatitis B at birth with post-natal check
+           mov_pc = mov4 | mov6 | mov15, # polio or measles or DTP with non-campaign vitamin A
+           mov_ca = mov8 | mov10 | mov17, # polio or measles or DTP with campaign vitamin A
+           mov_cc = mov12 | mov14 | mov16 | mov18, # polio or measles or DTP with curative care or DTP or polio or BCG with measles
+           vaccine_status = B & M & PEND & P) %>% # has vaccination against DTP, polio, BCG and measles
+    mutate(mov_any  = select(., matches("^mov\\d"))        %>% apply(1, any), # has to be in a separate mutate call because relies on the whole data frame
+           mov_any2 = select(., matches("^mov\\d"), -mov2) %>% apply(1, any)) %>% 
+# 7 - recoding "independent" variables:
+    mutate_at(c("HH6", "HH7", "melevel", "ethnicity", "windex5", "HL4", "MT0"), recode2) %>% 
+# 8 - selecting variables:
+    select(starts_with("mov"), vaccine_status, starts_with("HH"), "chweight",
+           "delivery", "melevel", "ethnicity", "windex5", "HL4", "WB2", "MT0", "AG2") %>% 
+# 9 - converting to a survey design object:
+    survey::svydesign(~ HH1 + HH2, strata = ~ HH6 + HH7, weights = ~ chweight, data = .)
+}
+```
+
+Let's generate the data:
+
+```{r}
+mics_survey <- data_preparation(mics, pattern = "^IM3|^HF13", exclude_inconsistencies = TRUE, keep_min = TRUE)
 ```
 
 ## Analyses
 
 ### Proportions of children completely vaccinated
 
-Proportion of all the children who are completely vaccinated:
+Let's estimate the proportions of children that are fully vaccinated per age
+class, region and area type. The number of children per age class is:
 
 ```{r}
-svymean(~ vaccine_status, mics_survey, TRUE)
+mics_survey$variables %>%
+   group_by(AG2) %>%
+   tally()
 ```
 
-Same for the 1-2 year age class:
+The number of children per region is:
 
 ```{r}
-svymean(~ vaccine_status, subset(mics_survey, age_sel), TRUE)
+mics_survey$variables %>%
+   group_by(HH7) %>%
+   tally()
 ```
 
-The confidence intervals are obtained this way:
+The number of children per environment is:
 
 ```{r}
-confint(svymean(~ vaccine_status, mics_survey, TRUE))
-confint(svymean(~ vaccine_status, subset(mics_survey, age_sel), TRUE))
+mics_survey$variables %>%
+   group_by(HH6) %>%
+   tally()
 ```
 
-The following function puts estimates, its standard error and its confidence
-interval together:
+Note that 
+
+```{r eval = FALSE}
+svyby(~ vaccine_status, ~ AG2, mics_survey, svyciprop)
+```
+
+doesn't work. Let's consider the following function instead:
 
 ```{r}
-put_together <- function(x) {
-  x %>% 
-    list(., confint(.)) %>% 
-    lapply(as.data.frame) %>% 
-    bind_cols() %>% 
-    `[`(., 2, )
+proportions <- function(svy, var, name) {
+  require(rlang)
+  require(dplyr)
+  nb <- na.exclude(tally(group_by(svy$variables, !!eval(enquo(var)))))
+# the sort() below is need because the group_by() above does sorting
+  lapply(sort(na.exclude(unlist(unique(select(svy$variables, !!eval(enquo(var))))))),
+         function(x)
+           svyciprop(~ vaccine_status, subset(svy, !!eval(enexpr(var)) == x)) %>%
+             c(., attr(., "ci")) %>%
+             matrix(1) %>%
+             as.data.frame()) %>% 
+    bind_rows() %>% 
+    `*`(100) %>%
+    round(2) %>% 
+    cbind(nb, .) %>% 
+    `names<-`(c(name, "n", "proportion", "2.5%", "97.5%"))
 }
 ```
 
-Let's try it on all the children:
+That we can use to calculate the proportion of fully vaccinated children per
+age class:
 
 ```{r}
-svymean(~ vaccine_status, mics_survey, TRUE) %>% 
-  put_together() %>% 
-  `*`(100) %>% 
-  round(2)
+proportions(mics_survey, AG2, "age")
 ```
 
-and on the 1-2 year-old children:
+Per region:
 
 ```{r}
-svymean(~ vaccine_status, subset(mics_survey, age_sel), TRUE) %>% 
-  put_together() %>% 
-  `*`(100) %>% 
-  round(2)
+mics_survey %>% 
+  proportions(HH7, "region") %>%
+  arrange(proportion)
 ```
 
-### Proportions of children with MOV
-
-Here are the MOV variables that we'll consider:
+And per environment:
 
 ```{r}
-(y <- grep("mov", names(mics_survey$variables), value = TRUE))
+proportions(mics_survey, HH6, "environment")
 ```
 
-The following function builds a formula from a vector `x` of names of explanatory
-variables and the name `y` of a dependent variable:
+### Proportions of 1-2 year-old children with MOV
+
+From now on, we'll consider the following subset of children:
+
+```{r}
+mics_survey2 <- subset(mics_survey, AG2 == 1)
+```
+
+In order to account for potential non-linearity of the effect of mother's age,
+let's discretize this variable:
+
+```{r}
+if (length(unique(mics_survey2$variables$WB2)) > 3)
+  mics_survey2$variables$WB2 %<>%
+    cut(., quantile(., seq(0, 1, le = 4), TRUE), include.lowest = TRUE) %>% 
+    as.character()
+```
+
+Note that we convert it into character, as are all the other "independent"
+variables. This is better in order to use the `svyglm2()` function below. Here
+are the MOV variables that we'll consider:
+
+```{r}
+(y <- grep("mov", names(mics_survey2$variables), value = TRUE))
+```
+
+The following function builds a formula from a vector `x` of names of
+explanatory variables and the name `y` of a dependent variable:
 
 ```{r}
 make_formula <- function(x, y) as.formula(paste(y, "~", paste(x, collapse = " + ")))
@@ -552,17 +660,24 @@ affects:
 
 ```{r}
 y %>% 
-  lapply(function(x) svymean(make_formula(x, ""), subset(mics_survey, age_sel), TRUE)) %>% 
-  lapply(put_together) %>%
-  bind_rows() %>%
+  lapply(function(x)
+           svyciprop(make_formula(x, ""), mics_survey2) %>% 
+             c(., attr(., "ci")) %>%
+             matrix(1) %>%
+             as.data.frame()) %>% 
+  bind_rows() %>% 
   `*`(100) %>% 
   round(2) %>% 
-  bind_cols(data.frame(MOV = y, stringsAsFactors = FALSE), .) %>% 
-  arrange(desc(mean))
+  bind_cols(data.frame(MOV = y, stringsAsFactors = FALSE), .) %>%
+  `names<-`(c("MOV", "proportion", "2.5%", "97.5%")) %>% 
+  arrange(desc(proportion))
 ```
 
-Note that there are no MOV4 and no MOV6. We'll thus remove them from the
-analyses below.
+Note that there are no MOV6. We'll thus remove them from the analyses below:
+
+```{r}
+y2 <- setdiff(y, "mov6")
+```
 
 ### Logistic models
 
@@ -573,40 +688,28 @@ as a function of the following variables:
 x <- c("HH6", "HH7", "delivery", "melevel", "ethnicity", "windex5", "HL4", "WB2", "MT0")
 ```
 
-#### Independance between explanatory variables
+#### Identification of confounders
 
-For the categorical variables (i.e. all except the age of the mother, `WB2`), we
-can perform a Wald test of 2 x 2 contingency table in order to generate pairwise
-matrix of independence:
+A variable can be considered as a confounder if it's not independent of the
+exposure. Thus, a first step in narrowing potential confounders is to generate
+a matrix of independence between all pairs of independent variables. This can be
+done by Wald tests on contingency tables in order to generate pairwise matrix of
+independence as done below. This is preferable to a logistic regression as it
+allows to test relationships between categorical variables of any number of
+levels.
 
 ```{r}
-vars <- c(setdiff(x, "WB2"), "WB2")
 nb <- length(x)
-out <- matrix(numeric(nb * nb), nb, dimnames = list(vars, vars))
-for(i in 1:(nb - 1))
-  for(j in setdiff(1:(nb - 1), i))
-    out[i, j] <- svychisq(make_formula(c(vars[i], vars[j]), ""),
-                          subset(mics_survey, age_sel), "Wald")$p.value
-```
-
-For the only continuous variable, `WB2`, we can perform simple analyses of
-variance and add it to the matrix:
-
-```{r}
-out2 <-
-  sapply(vars[-length(vars)],
-         function(x)
-           anova(svyglm(make_formula(x, "WB2"), subset(mics_survey, age_sel)),
-                 svyglm(make_formula("1", "WB2"), subset(mics_survey, age_sel)),
-                 test = "Chisq")$p)
-out[nb, ] <- c(out2, 0)
-out[, nb] <- c(out2, 0)
+x_mat <- matrix(numeric(nb * nb), nb, dimnames = list(x, x))
+for(i in 1:nb)
+  for(j in setdiff(1:nb, i))
+    x_mat[i, j] <- svychisq(make_formula(c(x[i], x[j]), ""), mics_survey2, "Wald")$p.value
 ```
 
 The matrix looks like:
 
 ```{r}
-round(out, 4)
+round(x_mat, 4)
 ```
 
 We can see that the sex of the child (`HL4`) is the only variable that is
@@ -615,298 +718,202 @@ dependent of each other. And this remains true even if we apply a Bonferroni
 correction for multiple tests:
 
 ```{r}
-out < (.05 / 27)
+alpha <- .05
+x_mat < (2 * alpha / (nb^2 - nb))
 ```
 
-Maybe not so much any more for `melevel` and `HH6` and for `melevel` and
-`delivery`, meaning that the educational level of the mother may not depend so
-much on the urban vs rural settings and that the mode of delivery in turn may
-not depend so much on the educational level of the mother.
-
-In conclusion, among our independent variables, only the sex of the child (`HL4`)
-can be ruled out as a potential confounder. To identify potential confounders
-among the other independent variables, we can with univariable analyses as
-before:
+Thus, among our independent variables, only the sex of the child (`HL4`) can be
+ruled out at this stage as a potential confounder. A second condition for a
+variable to be considered as a potential confounder is that it should be
+non-independent of the outcome. For that, we can proceed as done above:
 
 ```{r}
-confounders <- rbind(sapply(setdiff(y, c("mov4", "mov6")),
-                            function(j)
-                              sapply(setdiff(x, c("HL4", "WB2")),
-                                     function(i)
-                                       svychisq(make_formula(c(i, j), ""),
-                                                subset(mics_survey, age_sel),
-                                                "Wald")$p.value)),
-                     sapply(setdiff(y, c("mov4", "mov6")),
-                           function(x)
-                             anova(svyglm(make_formula("WB2", x), subset(mics_survey, age_sel)),
-                                   svyglm(make_formula("1", x), subset(mics_survey, age_sel)),
-                                   test = "Chisq")$p))
-row.names(confounders) <- sub("^$", "WB2", row.names(confounders))
+non_corrected <- sapply(y2, function(j)
+                              sapply(x, function(i)
+                                svychisq(make_formula(c(i, j), ""),
+                                         mics_survey2,
+                                         "Wald")$p.value))
+```
+
+Which gives:
+
+```{r}
+round(non_corrected, 4)
+```
+
+Thus, now, the potential confounders, for each MOV, are:
+
+```{r}
+(pot_conf <- lapply(as.data.frame(non_corrected),
+                    function(x) setdiff(rownames(non_corrected)[which(x < .1)], "HL4")))
+```
+
+Note above that we exclude `HL4` from all the potential confounders. Last step
+is to rerun all these models, this time correcting for potential confoundings.
+
+#### Models correcting for potential confounding effects
+
+The following function implements a partial likelihood ratio test (LRT) and
+returns the corresponding p value:
+
+```{r}
+corrected_p_value <- function(x, y) {
+  make_formula(c(setdiff(pot_conf[[y]], x), x), y) %>% # adding potential confounders
+    svyglm(mics_survey2, family = quasibinomial) %>%  # runing binomial regression
+    anova(., update(., make_formula(paste(". - ", x), ".")), test = "Chisq") %>% # partial LRT
+    `$`("p")
+}
+```
+
+Note here that, because of the `update()` call, we cannot put the family and the
+design as arguments of the function. We chose not to include the `pot_conf`
+object either. Let's try it:
+
+```{r}
+corrected_p_value(x[1], y[1])
+```
+
+Let's now apply it to all the independent and dependent varibles realationships
+that need to be corrected:
+
+```{r}
+corrected <- non_corrected
+with_confounders <- names(which(sapply(pot_conf, length) > 0))
+corrected[, with_confounders] <- sapply(with_confounders,
+                                        function(y) sapply(x, corrected_p_value, y = y))
 ```
 
 which gives:
 
 ```{r}
-round(confounders, 4)
+round(corrected, 4)
 ```
 
-Thus, the potential confounders, for each MOV, are:
+to be compared with:
 
 ```{r}
-(pot_conf <- lapply(as.data.frame(confounders),
-                    function(x) rownames(confounders)[which(x < .1)]))
+round(non_corrected, 4)
 ```
 
-
-#### Univariable analysis
-
-For given `x` and `y` variables of a given design `design`, the following
-function reorder the levels of the categorical `x` variable according to the
-effects of its levels on the the `y` variable:
+Filtering out the significant relationships:
 
 ```{r}
-ordered_levels <- function(design, x, y) {
-  svyby(make_formula(y, ""), make_formula(x, ""), design, svymean, na.rm = TRUE) %>% 
-    arrange(!!sym(paste0(y, "TRUE"))) %>% 
-    select(x) %>% 
-    unlist() %>% 
-    unname()
-}
+alpha <- .05
+corrected < alpha
 ```
 
-Let's try it:
+Applying a multiple tests correction:
 
 ```{r}
-ordered_levels(subset(mics_survey, age_sel), "HH7", "mov2")
+(mt_correction <- corrected < alpha / prod(dim(corrected)))
 ```
 
-The following function orders all the character variables of a design `design`
-for a given dependent variable `y`:
+The function below is a wrapper around the `svyglm()` function. It ensures that,
+in the design, the last "independent" variable of the formula is ordered
+according to the mean level of the dependent variable of the formula. This way
+maximizes the chance of finding significativity of the last "independent"
+variable when using a treatment contrast as is the default in R for unordered
+factors:
 
 ```{r}
-order_factors <- function(design, y) {
-  sel <- names(which(sapply(design$variables, is.character)))
-  if (length(sel))
-    for(i in sel)
-      design$variables[, i] <- factor(design$variables[, i],
-                                           ordered_levels(design, i, y))
-  return(design)
-}
-```
-
-Let's try it:
-
-```{r}
-order_factors(mics_survey, "mov1")
-```
-
-The following function looks at the univariable effects of the all the variables
-named in vector `x` on the dependent variable `y` of the design `design`:
-
-```{r}
-summary_coef <- function(x, y, design, f, family) {
-  f(make_formula(x, y), order_factors(design, y), family = family) %>% 
-    summary() %>% 
-    coef() %>% 
-    as.data.frame() %>% 
-    bind_cols(data.frame(var = rownames(.), stringsAsFactors = FALSE), .)
- }
-```
-
-Let's try it for the effect of `HH7` on `mov1`:
-
-```{r}
-summary_coef("HH7", "mov1", subset(mics_survey, age_sel), svyglm, quasibinomial)
-```
-
-Let's try it for the effects of all the explanatory variables on all the MOVs:
-
-```{r}
-for (i in setdiff(y, c("mov4", "mov6"))) {
-  print(i)
-  lapply(x, summary_coef, y = i, design = subset(mics_survey, age_sel),
-         f = svyglm, family = quasibinomial) %>% 
-    bind_rows() %>% 
-    mutate_if(is.numeric, round, 6) %>% 
-    print()
-  print("-----------")
-}
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#### Previous stuff
-
-To compare with:
-
-```{r eval=F, include=F}
-f <- function(x, y, design) {
-  make_formula(paste(x, "+", y), "") %>% 
-    svychisq(design, statistic = "Wald") %>%
-    `[`(1:3) %>% 
-    unlist() %>% 
-    matrix(1) %>% 
-    as.data.frame() %>% 
-    mutate_if(is.numeric, round, 3) %>% 
-    setNames(c("F", "ndf", "ddf", "p.value"))
-}
-```
-
-Let's try it:
-
-```{r eval=F, include=F}
-f("HH7", "mov1", subset(mics_survey, age_sel))
-```
-
-```{r eval=F, include=F}
-setdiff(x, "WB2") %>% 
-  sapply(f, y = "mov1", design = subset(mics_survey, age_sel)) %>% 
-  t() %>% 
-  as.data.frame()
-```
-
-```{r eval=F, include=F}
-contr_adjacent <- function(n) {
-  nx <- n - 2
-  sapply(0:nx, function(x) c(rep(0, x), c(-1, 1), rep(0, nx - x)))
-}
-```
-
-```{r eval=F, include=F}
-model_with_ordered_factors <- function(f, formula, family, design) {
-  vars <- all.vars(formula)
-  ys <- vars[-1]
-  ys_char <- which(sapply(select(design$variables, ys), is.character))
-  if (length(ys_char)) {
-    for (i in names(ys_char)) {
-      levels <- ordered_levels(mics_survey, i, vars[1])
-      new_var <- factor(design$variables[, i], levels)
-      contrasts(new_var) <- contr_adjacent(length(levels))
-      design$variables[, i] <- new_var
-    }
-  }
-  f(formula, family = family, design = design)
-}
-```
-
-Let's try it:
-
-```{r eval=F, include=F}
-model_with_ordered_factors(svyglm, mov1 ~ HH7, binomial, mics_survey)
-```
-
-```{r eval=F, include=F}
-make_summary <- function(f, formula, family, design, quantitative = FALSE) {
-  A <- model_with_ordered_factors(f, formula, family, design)
-  B <- model_with_ordered_factors(f, update(formula, . ~ . - 1), family, design)
-  if (quantitative) out <- round(cbind(exp(cbind(coef(B), confint(B))),
-                                       coef(summary(A))[-1, 3:4, drop = FALSE]), 6)
-  else out <- round(cbind(exp(cbind(coef(B), confint(B))), coef(summary(A))[, 3:4]), 6)
-  data.frame(rownames(out), out) %>% 
-    setNames(c("level", "effect", "2.5 %", "97.5 %", "t value", "Pr(>|t|)"))
-}
-```
-
-Let's try it:
-
-```{r eval=F, include=F}
-make_summary(svyglm, mov1 ~ HH7, binomial(), mics_survey)
-```
-
-```{r eval=F, include=F}
-x %>%
-  sapply(function(x) formula(paste("mov1", "~", x))) %>% 
-  map2(sapply(mics_survey$variables[, x], is.numeric), make_summary, f = svyglm, family = binomial(), design = mics_survey) %>% 
-  lapply(as.data.frame) %>% 
-  bind_rows(.id = "variable")
-```
-
-```{r eval=F, include=F}
-anova(svyglm(mov1 ~ HH6 + HH7 + delivery + melevel + ethnicity, mics_survey, family = binomial), test = "Chisq")
-Anova(svyglm(mov1 ~ HH6 + HH7 + delivery + melevel + ethnicity, mics_survey, family = binomial), test = "Chisq", type = "II")
-anova(svyglm(mov1 ~ HH6 + HH7 + delivery + ethnicity + melevel, mics_survey, family = binomial), test = "Chisq")
-```
-
-```{r eval=F, include=F}
-summarize_results <- function(formula, family, design, col_name = col_name) {
-  mod <- svyglm_ordered(formula, binomial, design)
-  cbind(exp(coef(mod))[-1], exp(confint(mod))[-1, , drop = FALSE], summary(mod)$coefficients[-1, 4]) %>% 
-    round(3) %>% 
-    cbind(rownames(.), .) %>% 
-    as.data.frame() %>% 
-    setNames(c("Predictor Variable", col_name, "2.5 %", "97.5 %", "P value"))
-}
-```
-
-```{r eval=F, include=F}
-formula <- mov1 ~ HH7
-col_name <- "crude OR"
-```
-
-```{r eval=F, include=F}
-summarize_results(mov1 ~ HH7, "crude OR")
-```
-
-```{r eval=F, include=F}
-mk_frml <- function(x, y) formula(paste(y, "~", x))
-x %>%
-  sapply(mk_frml, y = "mov1") %>% 
-  lapply(summarize_results, col_name = "Crude OR") %>% 
-  reduce(bind_rows)
-```
-
-```{r eval=F, include=F}
-f <- function(x, y) {
-  out <- bind_cols(reduce(lapply(x, univariate_results, y), bind_rows),
-                   multivariate_results(x, "mov_any")[, -1])
-  write.csv(out, paste0(y, ".csv"), quote = FALSE, row.names = FALSE)
-  out
-}
-```
-
-```{r eval=F, include=F}
-svyglm_corrected <- function(formula, design) {
-  require(survey)
+svyglm2 <- function(formula, design, ...) {
+  require(magrittr)
   require(dplyr)
-  tmp <- all.vars(formula)
-  y <- tmp[1]
-  xs <- tmp[-1]
-  lapply(seq_along(xs),
-         function(z) {
-           make_formula(c(xs[-z], xs[z]), y) %>% 
-             svyglm(., family = binomial, design = final) %>% 
-             anova(.,test = "Chisq") %>%
-             `[[`(length(xs)) %>% 
-             unclass() %>% 
-            `[`(c("chisq", "df", "p")) %>% 
-             unlist()
-         }) %>%
-   purrr::reduce(., bind_rows) %>% 
-   bind_cols(var = xs, .)
+  vars <- all.vars(formula)
+  y <- first(vars)
+  x <- last(vars)
+  levels <- svyby(make_formula(y, ""), make_formula(x, ""), design, svyciprop) %>%
+    arrange(!!sym(y)) %>%
+    select(!!sym(x)) %>%
+    unlist() %>%
+    unname()
+  design$variables[, x] %<>% factor(levels)
+  survey::svyglm(formula, design, ...)
 }
 ```
+
+Below, we use this function to compute the significant models. Note that, is the
+names of the list's slots, `$mov101` means "first model for `mod10`",  `$mov102`
+means "second model for `mod10`", etc...
+
+```{r}
+mt_correction <- as.data.frame(mt_correction)
+mov_sel <- names(which(colSums(mt_correction) > 0))
+
+models_sel <- mt_correction %>%
+  select(mov_sel) %>% 
+  lapply(function(x) rownames(mt_correction)[which(x)])
+
+x_var <- unlist(models_sel)
+y_var <- rep(names(models_sel), sapply(models_sel, length))
+  
+final_models <- purrr::map2(x_var, y_var,
+                            function(x, y)
+                              svyglm2(make_formula(c(setdiff(pot_conf[[y]], x), x), y),
+                                      mics_survey2, family = quasibinomial))
+```
+
+Out of these final models, we need to filter out the models for which
+
+* there is only 1 independent variable;
+* this independent variable has only 2 levels;
+* the effect of these levels is not significant.
+
+Indeed, such models were selected as significant in the first place just
+because including the independent variable made the mean of the MOV
+significantly more different from zero than without the independent variable.
+This is somehow an artifact of our selection method. The fonction below helps
+correcting for this *a posteriori*:
+
+```{r}
+post_filter <- function(x, alpha) {
+  coeffs <- coef(summary(x))
+  !(nrow(coeffs) < 3 & coeffs[2, 4] > alpha)
+}
+```
+
+Let's use this function to filter out and print the summary of these models:
+
+```{r}
+lapply(final_models[sapply(final_models, post_filter, .05)], summary)
+```
+
+In these models above, we'd expect to see at least one of the levels of the last
+"independent" variable significant. This is not the case all the time. One
+reason for that could be that the coding of the variable is not optimal and that
+a recoding of it could increase the power of the test. This could be
+investigated by a manual recoding of these variable but, given the values of the
+p values, that's probably not very likely. An alternative explanation is that it
+is again an artefact of our method. Let's thus filter out this models for now
+and the function below does so:
+
+```{r}
+post_filter2 <- function(x, alpha) {
+  coeffs <- coef(summary(x))
+  rn <- stringr::str_extract(rownames(coeffs), "^.{3}")
+  any(coeffs[rn == dplyr::last(rn), 4] < alpha)
+}
+```
+
+Let's apply it:
+
+```{r}
+lapply(final_models[sapply(final_models, post_filter2, .05)], summary)
+```
+
+To get the odds and odds ratio, we need to exponentiate the values of the
+coefficients:
+
+```{r}
+lapply(final_models[sapply(final_models, post_filter2, .05)],
+       function(x) cbind(coef(x), confint(x)))
+```
+
+The conclusion of the analysis is that:
+
+* MOV of DTP with curative care (`mov16`) increases as age of the mother
+  decreases
+* MOV of polio or DTP with vitamin A campaign (`mov_ca`) increases as the age of
+  the mother decreases
+* the presence of any MOV (including or not hepatitis B at birth) varies from
+  region to region
