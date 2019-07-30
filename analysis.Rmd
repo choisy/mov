@@ -151,12 +151,13 @@ if (! file.exists(gadm))
 provinces <- readRDS(gadm)
 ```
 
-Downloading the MICS report:
+Downloading the MICS report from the [UNICEF](http://mics.unicef.org/surveys)
+website:
 
 ```{r}
 mics_pdf <- "Vietnam Multiple Indicator Cluster Survey 2014.pdf"
 if (! file.exists(mics_pdf))
-  download.file("http://bit.ly/mics_vn", mics_pdf)
+  download.file("http://bit.ly/mics5vn", mics_pdf)
 mics_report <- pdftools::pdf_text(mics_pdf)
 ```
 

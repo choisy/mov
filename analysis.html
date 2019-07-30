@@ -656,10 +656,10 @@ mics &lt;- left_join(ch, wm, c(&quot;HH1&quot;, &quot;HH2&quot;, &quot;UF6&quot;
 if (! file.exists(gadm))
   download.file(&quot;https://biogeo.ucdavis.edu/data/gadm3.6/Rsf/gadm36_VNM_1_sf.rds&quot;, gadm)
 provinces &lt;- readRDS(gadm)</code></pre>
-<p>Downloading the MICS report:</p>
+<p>Downloading the MICS report from the <a href="http://mics.unicef.org/surveys">UNICEF</a> website:</p>
 <pre class="r"><code>mics_pdf &lt;- &quot;Vietnam Multiple Indicator Cluster Survey 2014.pdf&quot;
 if (! file.exists(mics_pdf))
-  download.file(&quot;http://bit.ly/mics_vn&quot;, mics_pdf)
+  download.file(&quot;http://bit.ly/mics5vn&quot;, mics_pdf)
 mics_report &lt;- pdftools::pdf_text(mics_pdf)</code></pre>
 <p>Extracting provinces names per region from the table of page 429</p>
 <pre class="r"><code>provinces_per_region &lt;- mics_report[429] %&gt;%
