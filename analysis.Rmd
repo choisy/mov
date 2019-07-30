@@ -921,3 +921,10 @@ The conclusion of the analysis is that:
   the mother decreases
 * the presence of any MOV (including or not hepatitis B at birth) varies from
   region to region
+
+## Session info
+
+```{r}
+sessionInfo()
+```
+
