@@ -905,6 +905,51 @@ The conclusion of the analysis is that:
 * the presence of any MOV (including or not hepatitis B at birth) varies from
   region to region
 
+## Addendum
+
+Let's say you are interested in the following model:
+
+```{r}
+mod <- svyglm(mov_any2 ~ delivery + melevel, mics_survey2, family = quasibinomial)
+```
+
+As you can see below
+
+```{r}
+summary(mod)
+```
+
+the level `home` is taken as a reference for the variable 
+`delivery` and all the tests are done comparing the other levels to that level
+of reference `home`. If, instead, you want to take level `private` as the level
+of reference and, in addition, compare `public` to `private` before you compare
+`home` to `private`, redefine the levels of the factor `delivery` with `private`
+first then `public`, then `home`:
+
+```{r}
+mics_survey3 <- mics_survey2
+mics_survey3$variables$delivery %<>% factor(c("private", "public", "home"))
+```
+
+Now, rerun the model on `mics_survey3`:
+
+```{r}
+mod <- svyglm(mov_any2 ~ delivery + melevel, mics_survey3, family = quasibinomial)
+```
+
+Which now gives:
+
+```{r}
+summary(mod)
+```
+
+If you are interested in the odds ratio together with the 95% confidence
+interval:
+
+```{r}
+exp(cbind(coef(mod), confint(mod)))
+```
+
 ## Session info
 
 ```{r}
